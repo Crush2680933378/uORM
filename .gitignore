@@ -1,0 +1,23 @@
+# Build directories
+build/
+out/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# CMake cache
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+
+# Binaries
+*.exe
+*.dll
+*.lib
+*.so
+*.dylib
+
+# Logs
+*.log
