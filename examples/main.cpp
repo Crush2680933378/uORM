@@ -50,6 +50,6 @@ int main() {
     // 查询全部
     auto all = userDao.findAll();
     // 删除数据
-    userDao.deleteById<int64_t>(u.id);
+    //userDao.deleteById<int64_t>(u.id);
     return 0;
 }

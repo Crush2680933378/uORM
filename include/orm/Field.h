@@ -46,7 +46,7 @@ AnyField<C> makeField(const std::string& name, M C::* member, SqlType type, std:
     // getter实现：读取成员值并转换为Value变体类型
     f.getter = [member](const C& c) -> Value {
         if constexpr (is_optional_v<M>) {
-            if (!c.*member) return std::nullptr_t{};
+            if (!(c.*member).has_value()) return std::nullptr_t{};
             using T = typename M::value_type;
             if constexpr (std::is_same_v<T, int32_t>) return static_cast<int32_t>(*(c.*member));
             else if constexpr (std::is_same_v<T, int64_t>) return static_cast<int64_t>(*(c.*member));
@@ -84,3 +84,4 @@ AnyField<C> makeField(const std::string& name, M C::* member, SqlType type, std:
     return f;
 }
 } // namespace uORM
+
