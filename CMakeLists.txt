@@ -53,5 +53,5 @@ install(EXPORT uORMTargets
   DESTINATION lib/cmake/UORM
 )
 
-install(FILES cmake/uORMConfig.cmake cmake/UORMConfig.cmake DESTINATION lib/cmake/UORM)
+install(FILES cmake/uORMConfig.cmake cmake/UORMConfig.cmake cmake/UORMConfigVersion.cmake DESTINATION lib/cmake/UORM)
 
