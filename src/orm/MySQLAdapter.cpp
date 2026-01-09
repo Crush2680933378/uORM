@@ -65,7 +65,7 @@ Value MySQLAdapter::readValue(sql::ResultSet* rs, int idx, const ColumnSpec& c) 
     switch (c.type) {
         case SqlType::Int32: return static_cast<int32_t>(rs->getInt(idx));
         case SqlType::BigInt: return static_cast<int64_t>(rs->getInt64(idx));
-        case SqlType::Double: return rs->getDouble(idx);
+        case SqlType::Double: return static_cast<double>(rs->getDouble(idx));
         case SqlType::Bool: return rs->getBoolean(idx);
         case SqlType::VarChar:
         case SqlType::Text:
