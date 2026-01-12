@@ -283,7 +283,7 @@ public:
         auto dialect = ConnectionPool::instance().getDialect();
         if (!dialect) return 0;
 
-        std::string sql = "SELECT COUNT(*) FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
+        std::string sql = "SELECT COUNT(*) AS count_val FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
         
         std::string where = query.getWhere();
         if (!where.empty()) {
@@ -301,8 +301,7 @@ public:
             
             auto res = pstmt->executeQuery();
             if (res->next()) {
-                // index 1 for the first column
-                return res->getInt64(1);
+                return res->getInt64("count_val");
             }
         } catch (const uORM::Exception& e) {
             throw; 
