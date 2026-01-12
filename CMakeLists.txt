@@ -37,7 +37,7 @@ set(THIRDPARTY_PG_DIR "${THIRDPARTY_DIR}/postgresql")
 
 # ujson (Custom JSON Library)
 add_subdirectory(thirdparty/uJSON)
-target_link_libraries(uorm PUBLIC uJSON_static)
+target_link_libraries(uorm PRIVATE $<BUILD_INTERFACE:uJSON_static>)
 target_compile_definitions(uorm PUBLIC UJSON_STATIC)
 
 # Database Driver Configuration
