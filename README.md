@@ -1,95 +1,273 @@
-# uJSON
+# uORM
 
-uJSON 是一个极简、轻量级且现代化的 C++17 JSON 库。它设计初衷是为了提供简单直观的 API，同时保持高性能和零外部依赖。
+uORM 是一个现代化的、轻量级的 C++ ORM (Object-Relational Mapping) 库，基于 C++17 标准。它支持 **MySQL** 和 **PostgreSQL**，提供类型安全的编译期反射、自动 Schema 管理、强大的链式查询构造器以及高性能的连接池管理。
 
 ## ✨ 核心特性
 
--   **现代 C++**: 基于 C++17 标准，利用 `std::variant`、`std::shared_ptr` 等现代特性。
--   **直观 API**: 支持直观的下标访问、链式调用和类型转换。
--   **零依赖**: 仅依赖 C++ 标准库，易于集成到任何项目中。
--   **异常安全**: 完善的异常处理机制 (`uJSON::ParseError`, `uJSON::TypeError` 等)，确保代码健壮性。
--   **灵活构建**: 支持构建为静态库或动态库，并在 Windows 上自动处理 DLL 导出。
--   **内存安全**: 内部自动管理内存，防止内存泄漏。
+-   **多数据库支持**: 支持 MySQL 和 PostgreSQL，可通过配置无缝切换。
+-   **编译期反射**: 利用宏和模板元编程，在 C++ 结构体与数据库表之间建立零开销映射。
+-   **安全查询构造器**: 提供流式 API (`Query` Builder) 构建复杂 SQL，自动处理参数绑定，**杜绝 SQL 注入**。
+-   **自动 Schema 管理**: 支持 `createTable` 自动建表，`truncate` 清空数据，支持自定义 SQL 类型（如 `TIMESTAMP`, `ENUM`）。
+-   **CRUD 全覆盖**: 简单的 `save` (Create), `findAll`/`select` (Read), `update` (Update), `remove`/`truncate` (Delete) 接口。
+-   **RAII 连接池**: 内置线程安全的连接池，支持自动重连和资源自动回收。
+-   **JSON 配置**: 简单易用的 JSON 配置文件。
 
-## 📦 集成方法
+## 📦 依赖环境
 
-### 使用 CMake
+-   **C++ 标准**: C++17 或更高
+-   **构建工具**: CMake 3.16+
+-   **依赖库**:
+    -   [nlohmann/json](https://github.com/nlohmann/json) (用于配置解析)
+    -   MySQL: [MySQL Connector/C++](https://dev.mysql.com/downloads/connector/cpp/)
+    -   PostgreSQL: [libpqxx](https://github.com/jtv/libpqxx) (可选)
 
-1.  将 `uJSON` 目录放入您的 `thirdparty` 文件夹。
-2.  在您的 `CMakeLists.txt` 中添加：
+## 🚀 快速开始
 
-    ```cmake
-    add_subdirectory(thirdparty/uJSON)
-    target_link_libraries(your_target PUBLIC uJSON) # 链接动态库
-    # 或者
-    target_link_libraries(your_target PUBLIC uJSON_static) # 链接静态库
-    ```
+### 1. 定义模型 (Model)
 
-## 🚀 快速上手
-
-### 1. 包含头文件
+使用 `UORM_TABLE_BEGIN` 系列宏定义数据模型。
 
 ```cpp
-#include <uJSON/ujson.h>
-using json = uJSON::Value;
+#include "uORM/orm/ORM.h"
+
+struct Product {
+    int id;
+    std::string name;
+    double price;
+    int stock;
+    std::string created_at;
+};
+
+// 注册表结构: 类名, 表名
+UORM_TABLE_BEGIN(Product, "products")
+    // 字段映射: 成员变量, 数据库列名, 约束条件
+    UORM_FIELD(id, "id", PRIMARY KEY AUTO_INCREMENT),
+    UORM_FIELD(name, "name", NOT NULL),
+    UORM_FIELD(price, "price", NOT NULL),
+    UORM_FIELD(stock, "stock", DEFAULT 0),
+    // 显式指定 SQL 类型 (解决 MySQL 5.7+ VARCHAR 默认值问题)
+    UORM_FIELD_TYPE(created_at, "created_at", "DATETIME", DEFAULT CURRENT_TIMESTAMP)
+UORM_TABLE_END()
 ```
 
-### 2. 解析 JSON
+### 2. 配置文件 (config.json)
+
+在可执行文件同级目录创建 `config.json`：
+
+```json
+{
+    "driver_type": 1, 
+    "hostname": "127.0.0.1",
+    "port": 3306,
+    "username": "root",
+    "password": "your_password",
+    "dataname": "uorm_db",
+    "poolsize": 5
+}
+```
+*   `driver_type`: `1` (MySQL), `2` (PostgreSQL)
+
+### 3. 初始化与使用
 
 ```cpp
-std::string json_str = R"({
-    "name": "uJSON",
-    "version": 1.0,
-    "features": ["fast", "simple"]
-})";
+#include "uORM/orm/ORM.h"
+#include <iostream>
 
-try {
-    json j = json::parse(json_str);
-    std::string name = j["name"].get<std::string>();
-    double version = j["version"].get<double>();
+int main() {
+    // 1. 加载配置
+    if (!uORM::ConfigManager::getInstance().readDataBaseconfig("config.json")) {
+        return -1;
+    }
     
-    std::cout << "Library: " << name << " v" << version << std::endl;
-} catch (const uJSON::Exception& e) {
-    std::cerr << "Error: " << e.what() << std::endl;
+    // 2. 初始化连接池
+    uORM::ConnectionPool::instance();
+    
+    // 3. 自动建表
+    uORM::Schema::createTable<Product>();
+    
+    // 4. 清空旧数据 (可选)
+    uORM::Mapper<Product>::truncate();
+
+    // 5. 插入数据
+    Product p{0, "iPhone 15", 999.99, 100, ""};
+    uORM::Mapper<Product>::save(p);
+    
+    // 6. 使用查询构造器 (推荐)
+    uORM::Query q;
+    q.eq("name", "iPhone 15")
+     .gt("price", 500.0);
+     
+    auto productOpt = uORM::Mapper<Product>::selectOne(q);
+    if (productOpt) {
+        std::cout << "Found: " << productOpt->name << std::endl;
+    }
+
+    return 0;
 }
 ```
 
-### 3. 生成 JSON
+## 🛠 功能详解
+
+### 查询构造器 (Query Builder)
+
+uORM 提供强大的链式调用 API，支持复杂的 SQL 逻辑。
 
 ```cpp
-json j = json::object();
-j["id"] = 123;
-j["active"] = true;
-j["data"] = json::array();
-j["data"].push_back(1);
-j["data"].push_back(2);
+uORM::Query query;
 
-std::cout << j << std::endl; 
-// 输出: {"id":123,"active":true,"data":[1,2]}
+// 基础条件
+query.eq("category", "Electronics")
+     .gt("price", 100.0);
+
+// 逻辑组合 (OR)
+query.eq("status", "pending")
+     .or_()
+     .lt("stock", 10);
+
+// 范围与集合
+query.between("created_at", "2023-01-01", "2023-12-31")
+     .in("id", std::vector<int>{1, 2, 3});
+
+// 模糊查询
+query.like("name", "%Pro%");
+
+// 排序与分页
+query.orderBy("price", false) // false = DESC
+     .limit(20)
+     .offset(0);
+
+// 执行查询
+auto results = uORM::Mapper<Product>::select(query);
 ```
 
-### 4. 异常处理
+### 事务支持
 
-uJSON 提供了细粒度的异常类：
+目前 uORM 的每个 `Mapper` 操作（如 `save`, `update`）都是原子性的（基于单次连接获取）。复杂的事务支持正在开发中，可以通过获取原生连接手动控制。
 
-*   `uJSON::ParseError`: 解析格式错误。
-*   `uJSON::TypeError`: 类型访问错误（如把数组当对象用）。
-*   `uJSON::RuntimeError`: 其他运行时错误（如数组越界）。
+## 🔌 在其他项目中使用
+
+推荐将 uORM 作为子模块（Submodule）集成。
+
+### 1. 推荐的项目结构
+
+```text
+MyProject/
+├── CMakeLists.txt          # 项目构建文件
+├── main.cpp                # 您的源代码
+├── config.json             # 数据库配置文件
+└── thirdparty/
+    └── uORM/               # 将 uORM 仓库克隆到这里
+```
+
+### 2. CMakeLists.txt 配置
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(MyProject CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 1. 引入 uORM
+add_subdirectory(thirdparty/uORM)
+
+# 2. 定义可执行文件
+add_executable(MyApp main.cpp)
+
+# 3. 链接 uORM
+target_link_libraries(MyApp PRIVATE uORM::uorm)
+
+# (可选) 复制配置文件
+configure_file(config.json ${CMAKE_CURRENT_BINARY_DIR}/config.json COPYONLY)
+```
+
+### 3. 示例代码 (main.cpp)
 
 ```cpp
-try {
-    json j = json::object();
-    j.get<int>(); // 抛出 TypeError
-} catch (const uJSON::TypeError& e) {
-    // 处理类型错误
+#include <iostream>
+#include <uORM/orm/ORM.h>
+
+// 定义模型
+struct User {
+    int id;
+    std::string name;
+    int age;
+    std::string email;
+};
+
+// 映射表结构
+UORM_TABLE_BEGIN(User, "users")
+    UORM_FIELD(id, "id", PRIMARY KEY AUTO_INCREMENT),
+    UORM_FIELD(name, "name", NOT NULL),
+    UORM_FIELD(age, "age", DEFAULT 18),
+    UORM_FIELD(email, "email", UNIQUE)
+UORM_TABLE_END()
+
+int main() {
+    // 1. 读取配置
+    try {
+        uORM::ConfigManager::getInstance().readDataBaseconfig("config.json");
+    } catch (const uORM::ConfigurationError& e) {
+        std::cerr << "配置加载失败: " << e.what() << std::endl;
+        return 1;
+    }
+
+    // 2. 初始化连接池
+    try {
+        uORM::ConnectionPool::instance();
+        std::cout << "数据库连接成功!" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "数据库连接错误: " << e.what() << std::endl;
+        return 1;
+    }
+
+    // 3. 自动建表
+    uORM::Schema::createTable<User>();
+
+    // 4. 插入数据
+    User newUser{0, "Trae", 25, "trae@example.com"};
+    if (uORM::Mapper<User>::save(newUser)) {
+        std::cout << "用户插入成功" << std::endl;
+    }
+
+    return 0;
 }
 ```
 
-## 🛠️ 构建选项
+## 🔨 构建指南
 
-| 选项 | 说明 |
-| :--- | :--- |
-| `BUILD_SHARED_LIBS` | 控制默认构建行为（uJSON 显式提供了 `uJSON` 和 `uJSON_static` 两个目标，此选项影响不大） |
+### 作为子项目集成
+
+将 uORM 放入项目的 `thirdparty` 目录，并在 `CMakeLists.txt` 中添加：
+
+```cmake
+add_subdirectory(thirdparty/uORM)
+target_link_libraries(your_app PRIVATE uORM::uorm)
+```
+
+### 独立构建与安装
+
+```bash
+mkdir build && cd build
+# 默认构建静态库，开启示例
+cmake .. -DUORM_BUILD_SHARED=OFF -DBUILD_EXAMPLES=ON
+cmake --build .
+
+# 运行示例
+./uORM_example
+```
+
+### 编译选项
+
+| 选项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `UORM_BUILD_SHARED` | `ON` | 构建动态库 (ON) 或静态库 (OFF) |
+| `USE_POSTGRESQL` | `OFF` | 启用 PostgreSQL 支持 (默认 MySQL) |
+| `BUILD_EXAMPLES` | `ON` | 构建示例程序 |
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
 
 ## 📄 许可证
 
