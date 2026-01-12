@@ -36,9 +36,10 @@ set(THIRDPARTY_MYSQL_DIR "${THIRDPARTY_DIR}/mysql")
 set(THIRDPARTY_PG_DIR "${THIRDPARTY_DIR}/postgresql")
 
 # ujson (Custom JSON Library)
+set(UJSON_BUILD_EXAMPLES OFF CACHE INTERNAL "Disable uJSON examples")
+set(UJSON_BUILD_SHARED OFF CACHE INTERNAL "Force uJSON static")
 add_subdirectory(thirdparty/uJSON)
-target_link_libraries(uorm PRIVATE $<BUILD_INTERFACE:uJSON_static>)
-target_compile_definitions(uorm PUBLIC UJSON_STATIC)
+target_link_libraries(uorm PUBLIC uJSON::ujson)
 
 # Database Driver Configuration
 if(USE_POSTGRESQL)
