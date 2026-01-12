@@ -37,7 +37,8 @@ set(THIRDPARTY_PG_DIR "${THIRDPARTY_DIR}/postgresql")
 
 # ujson (Custom JSON Library)
 add_subdirectory(thirdparty/uJSON)
-target_link_libraries(uorm PUBLIC uJSON)
+target_link_libraries(uorm PUBLIC uJSON_static)
+target_compile_definitions(uorm PUBLIC UJSON_STATIC)
 
 # Database Driver Configuration
 if(USE_POSTGRESQL)
@@ -170,3 +171,4 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/uORMConfigVersion.cmake" 
     DESTINATION lib/cmake/uORM
 )
+
