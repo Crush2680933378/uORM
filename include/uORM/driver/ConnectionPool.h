@@ -6,6 +6,7 @@
 #include "uORM/driver/DBInterfaces.h" 
 #include "uORM/driver/SqlDialect.h" 
 #include "uORM/driver/ConfigManager.h" 
+#include "uORM/orm/Error.h"
 #include <functional> 
 #include <queue> 
 #include <mutex> 
@@ -65,7 +66,7 @@ public:
             conn = createRawConnection(); 
             if (!conn || !conn->isValid()) { 
                 if(conn) delete conn; 
-                throw std::runtime_error("Failed to obtain valid DB connection"); 
+                throw ConnectionError("Failed to obtain valid DB connection"); 
             } 
         } 
         

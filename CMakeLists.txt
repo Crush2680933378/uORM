@@ -35,23 +35,9 @@ set(THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 set(THIRDPARTY_MYSQL_DIR "${THIRDPARTY_DIR}/mysql")
 set(THIRDPARTY_PG_DIR "${THIRDPARTY_DIR}/postgresql")
 
-# --- Dependencies ---
-find_package(nlohmann_json QUIET)
-if(NOT nlohmann_json_FOUND)
-    find_package(PkgConfig QUIET)
-    if(PKG_CONFIG_FOUND)
-        pkg_check_modules(NLOHMANN_JSON nlohmann_json)
-        if(NLOHMANN_JSON_FOUND)
-             add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
-             target_include_directories(nlohmann_json::nlohmann_json INTERFACE ${NLOHMANN_JSON_INCLUDE_DIRS})
-             set(nlohmann_json_FOUND TRUE)
-        endif()
-    endif()
-endif()
-
-if(nlohmann_json_FOUND)
-  target_link_libraries(uorm PUBLIC nlohmann_json::nlohmann_json)
-endif()
+# ujson (Custom JSON Library)
+add_subdirectory(thirdparty/uJSON)
+target_link_libraries(uorm PUBLIC uJSON)
 
 # Database Driver Configuration
 if(USE_POSTGRESQL)

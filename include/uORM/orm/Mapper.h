@@ -77,9 +77,10 @@ public:
                 pstmt->executeUpdate(); 
             } 
             return true; 
+        } catch (const uORM::Exception& e) {
+            throw; // Re-throw uORM exceptions
         } catch (const std::exception& e) { 
-            std::cerr << "保存失败: " << e.what() << std::endl; 
-            return false; 
+            throw SqlError(std::string("保存失败: ") + e.what());
         } 
     } 
 
@@ -142,9 +143,10 @@ public:
             
             pstmt->executeUpdate(); 
             return true; 
+        } catch (const uORM::Exception& e) {
+            throw; // Re-throw uORM exceptions
         } catch (const std::exception& e) { 
-            std::cerr << "更新失败: " << e.what() << std::endl; 
-            return false; 
+            throw SqlError(std::string("更新失败: ") + e.what());
         }
     }
 
@@ -183,9 +185,10 @@ public:
             
             pstmt->executeUpdate(); 
             return true; 
+        } catch (const uORM::Exception& e) {
+            throw; // Re-throw uORM exceptions
         } catch (const std::exception& e) { 
-            std::cerr << "删除失败: " << e.what() << std::endl; 
-            return false; 
+            throw SqlError(std::string("删除失败: ") + e.what());
         }
     }
 
@@ -201,9 +204,10 @@ public:
             auto stmt = connPtr->createStatement();
             stmt->execute(sql);
             return true;
+        } catch (const uORM::Exception& e) {
+            throw; // Re-throw uORM exceptions
         } catch (const std::exception& e) {
-            std::cerr << "清空表失败: " << e.what() << std::endl;
-            return false;
+            throw SqlError(std::string("清空表失败: ") + e.what());
         }
     }
 
@@ -316,8 +320,10 @@ private:
             while (res->next()) {
                 results.push_back(mapRow(res.get()));
             }
+        } catch (const uORM::Exception& e) {
+            throw; // Re-throw uORM exceptions
         } catch (const std::exception& e) {
-            std::cerr << "查询失败: " << e.what() << std::endl;
+            throw SqlError(std::string("查询失败: ") + e.what());
         }
         return results;
     }
@@ -336,8 +342,10 @@ private:
             while (res->next()) {
                 results.push_back(mapRow(res.get()));
             }
+        } catch (const uORM::Exception& e) {
+            throw; // Re-throw uORM exceptions
         } catch (const std::exception& e) {
-            std::cerr << "查询失败: " << e.what() << std::endl;
+            throw SqlError(std::string("查询失败: ") + e.what());
         }
         return results;
     }

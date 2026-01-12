@@ -2,9 +2,10 @@
 #include <string> 
 #include <vector>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include <uJSON/ujson.h>
+#include "uORM/orm/Error.h"
 
-using json = nlohmann::json;
+using json = uJSON::Value;
 
 namespace uORM { 
 
@@ -19,13 +20,13 @@ class ConfigBase {
 public: 
     virtual ~ConfigBase() = default; 
     // 读取数据库配置
-    virtual bool readDataBaseconfig(const std::string& path) = 0; 
+    virtual void readDataBaseconfig(const std::string& path) = 0; 
     // 读取JWT配置
-    virtual bool readJWTconfig(const std::string& path) = 0; 
+    virtual void readJWTconfig(const std::string& path) = 0; 
     // 读取邮件服务配置
-    virtual bool readEmailconfig(const std::string& path) = 0; 
+    virtual void readEmailconfig(const std::string& path) = 0; 
     // 读取Redis配置
-    virtual bool readRedisconfig(const std::string& path) = 0; 
+    virtual void readRedisconfig(const std::string& path) = 0; 
 }; 
 
 // 数据库配置数据结构
@@ -76,26 +77,32 @@ public:
     virtual ~ConfigManager() override = default; 
     
     // 实现基类接口，从文件读取配置
-    virtual bool readDataBaseconfig(const std::string& path) override {
+    virtual void readDataBaseconfig(const std::string& path) override {
         std::ifstream f(path); 
-        if (!f.is_open()) return false; 
+        if (!f.is_open()) {
+            throw ConfigurationError("Cannot open config file: " + path);
+        }
         try { 
             json j; 
             f >> j; 
             f.close(); 
             
             // 检查JSON结构是否包含必要的字段
-            if (!j.contains("DataBaseConfig")) return false; 
-            if (!j.at("DataBaseConfig").is_object()) return false; 
+            if (!j.contains("DataBaseConfig")) {
+                throw ConfigurationError("Config file missing 'DataBaseConfig' section");
+            }
+            if (!j.at("DataBaseConfig").is_object()) {
+                throw ConfigurationError("'DataBaseConfig' must be an object");
+            }
             const json db = j.at("DataBaseConfig"); 
             
             // 验证每个配置项的存在性和类型
-            if (!db.contains("hostname") || !db.at("hostname").is_string()) return false; 
-            if (!db.contains("username") || !db.at("username").is_string()) return false; 
-            if (!db.contains("password") || !db.at("password").is_string()) return false; 
-            if (!db.contains("dataname") || !db.at("dataname").is_string()) return false; 
-            if (!db.contains("port") || !db.at("port").is_number_integer()) return false; 
-            if (!db.contains("poolsize") || !db.at("poolsize").is_number_integer()) return false; 
+            if (!db.contains("hostname") || !db.at("hostname").is_string()) throw ConfigurationError("Missing or invalid 'hostname'");
+            if (!db.contains("username") || !db.at("username").is_string()) throw ConfigurationError("Missing or invalid 'username'");
+            if (!db.contains("password") || !db.at("password").is_string()) throw ConfigurationError("Missing or invalid 'password'");
+            if (!db.contains("dataname") || !db.at("dataname").is_string()) throw ConfigurationError("Missing or invalid 'dataname'");
+            if (!db.contains("port") || !db.at("port").is_number_integer()) throw ConfigurationError("Missing or invalid 'port'");
+            if (!db.contains("poolsize") || !db.at("poolsize").is_number_integer()) throw ConfigurationError("Missing or invalid 'poolsize'");
 
             // 读取驱动类型，默认为 mysql
             if (db.contains("driver") && db.at("driver").is_string()) {
@@ -117,30 +124,42 @@ public:
             databaseconfigdata_.dataname = db.at("dataname").get<std::string>(); 
             databaseconfigdata_.poolsize = db.at("poolsize").get<int>(); 
             
-            return databaseconfigdata_.isValid(); 
-        } catch (...) { 
-            return false; 
+            if (!databaseconfigdata_.isValid()) {
+                throw ConfigurationError("Invalid database configuration values");
+            }
+        } catch (const uJSON::ParseError& e) {
+            throw ConfigurationError(std::string("JSON Parse Error in ") + path + ": " + e.what());
+        } catch (const uJSON::TypeError& e) {
+            throw ConfigurationError(std::string("JSON Type Error in ") + path + ": " + e.what());
+        } catch (const std::exception& e) {
+            throw ConfigurationError(std::string("Error reading config: ") + e.what());
         } 
     }
 
-    virtual bool readRedisconfig(const std::string& path) override {
+    virtual void readRedisconfig(const std::string& path) override {
         std::ifstream f(path); 
-        if (!f.is_open()) return false; 
+        if (!f.is_open()) {
+            throw ConfigurationError("Cannot open config file: " + path);
+        }
         try { 
             json j; 
             f >> j; 
             f.close(); 
             
             // 检查JSON结构是否包含必要的字段
-            if (!j.contains("RedisConfig")) return false; 
-            if (!j.at("RedisConfig").is_object()) return false; 
+            if (!j.contains("RedisConfig")) {
+                throw ConfigurationError("Config file missing 'RedisConfig' section");
+            }
+            if (!j.at("RedisConfig").is_object()) {
+                throw ConfigurationError("'RedisConfig' must be an object");
+            }
             const json r = j.at("RedisConfig"); 
             
             // 验证每个配置项的存在性和类型
-            if (!r.contains("hostname") || !r.at("hostname").is_string()) return false; 
-            if (!r.contains("password") || !r.at("password").is_string()) return false; 
-            if (!r.contains("port") || !r.at("port").is_number_integer()) return false; 
-            if (!r.contains("poolsize") || !r.at("poolsize").is_number_integer()) return false; 
+            if (!r.contains("hostname") || !r.at("hostname").is_string()) throw ConfigurationError("Redis missing 'hostname'");
+            if (!r.contains("password") || !r.at("password").is_string()) throw ConfigurationError("Redis missing 'password'");
+            if (!r.contains("port") || !r.at("port").is_number_integer()) throw ConfigurationError("Redis missing 'port'");
+            if (!r.contains("poolsize") || !r.at("poolsize").is_number_integer()) throw ConfigurationError("Redis missing 'poolsize'");
     
             // 填充配置数据
             redisconfigdata_.hostname = r.at("hostname").get<std::string>(); 
@@ -148,18 +167,20 @@ public:
             redisconfigdata_.password = r.at("password").get<std::string>(); 
             redisconfigdata_.poolsize = r.at("poolsize").get<int>(); 
             
-            return redisconfigdata_.isValid(); 
-        } catch (...) { 
-            return false; 
+            if (!redisconfigdata_.isValid()) {
+                throw ConfigurationError("Invalid Redis configuration values");
+            }
+        } catch (const uJSON::Exception& e) {
+            throw ConfigurationError(std::string("Redis Config Error: ") + e.what());
+        } catch (const std::exception& e) {
+            throw ConfigurationError(std::string("Error reading Redis config: ") + e.what());
         } 
     }
 
-    virtual bool readJWTconfig(const std::string& path) override {
-        return true; 
+    virtual void readJWTconfig(const std::string& path) override {
     }
 
-    virtual bool readEmailconfig(const std::string& path) override {
-        return true; 
+    virtual void readEmailconfig(const std::string& path) override {
     }
     
     // 禁止拷贝和赋值

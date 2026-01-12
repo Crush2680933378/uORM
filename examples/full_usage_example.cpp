@@ -192,8 +192,10 @@ void demonstrateCRUD() {
 
 int main() {
     // 1. 读取配置
-    if (!uORM::ConfigManager::getInstance().readDataBaseconfig("config.json")) {
-        std::cerr << "配置文件读取失败，请确保 config.json 存在且格式正确。" << std::endl;
+    try {
+        uORM::ConfigManager::getInstance().readDataBaseconfig("config.json");
+    } catch (const uORM::ConfigurationError& e) {
+        std::cerr << "配置文件读取失败: " << e.what() << std::endl;
         return 1;
     }
 
@@ -201,6 +203,9 @@ int main() {
     try {
         uORM::ConnectionPool::instance();
         std::cout << "数据库连接成功!" << std::endl;
+    } catch (const uORM::Exception& e) {
+        std::cerr << "uORM 错误: " << e.what() << std::endl;
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "数据库连接失败: " << e.what() << std::endl;
         return 1;
