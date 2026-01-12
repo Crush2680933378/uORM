@@ -400,6 +400,7 @@ private:
     static void bindValue(IPreparedStatement* pstmt, int index, const long& val) { pstmt->setInt64(index, val); } 
     static void bindValue(IPreparedStatement* pstmt, int index, const long long& val) { pstmt->setInt64(index, val); } 
     static void bindValue(IPreparedStatement* pstmt, int index, const unsigned int& val) { pstmt->setUInt(index, val); } 
+    static void bindValue(IPreparedStatement* pstmt, int index, const unsigned long& val) { pstmt->setInt64(index, static_cast<long long>(val)); }
     static void bindValue(IPreparedStatement* pstmt, int index, const unsigned long long& val) { pstmt->setInt64(index, static_cast<long long>(val)); } // MySQL Connector C++ doesn't have setUInt64 in older versions or wrapper needs it
     static void bindValue(IPreparedStatement* pstmt, int index, const std::string& val) { pstmt->setString(index, val); } 
     static void bindValue(IPreparedStatement* pstmt, int index, const char* val) { pstmt->setString(index, val); } 
@@ -424,6 +425,7 @@ private:
         if constexpr (std::is_same_v<V, int>) return res->getInt(colName); 
         else if constexpr (std::is_same_v<V, long>) return res->getInt64(colName); 
         else if constexpr (std::is_same_v<V, long long>) return res->getInt64(colName); 
+        else if constexpr (std::is_same_v<V, unsigned long>) return static_cast<unsigned long>(res->getInt64(colName));
         else if constexpr (std::is_same_v<V, unsigned long long>) return static_cast<unsigned long long>(res->getInt64(colName));
         else if constexpr (std::is_same_v<V, std::string>) return res->getString(colName); 
         else if constexpr (std::is_same_v<V, bool>) return res->getBoolean(colName); 
