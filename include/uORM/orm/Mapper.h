@@ -278,6 +278,40 @@ public:
         return results[0];
     }
 
+    // 统计记录数
+    static long long count(const Query& query = Query()) {
+        auto dialect = ConnectionPool::instance().getDialect();
+        if (!dialect) return 0;
+
+        std::string sql = "SELECT COUNT(*) FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
+        
+        std::string where = query.getWhere();
+        if (!where.empty()) {
+            sql += " WHERE " + where;
+        }
+
+        try {
+            auto connPtr = ConnectionPool::instance().getConnection();
+            auto pstmt = connPtr->prepareStatement(sql);
+            
+            const auto& params = query.getParams();
+            for (size_t i = 0; i < params.size(); ++i) {
+                bindSqlValue(pstmt.get(), i + 1, params[i]);
+            }
+            
+            auto res = pstmt->executeQuery();
+            if (res->next()) {
+                // index 1 for the first column
+                return res->getInt64(1);
+            }
+        } catch (const uORM::Exception& e) {
+            throw; 
+        } catch (const std::exception& e) {
+            throw SqlError(std::string("Count查询失败: ") + e.what());
+        }
+        return 0;
+    }
+
 private: 
     static bool hasDefaultConstraint(const char* constraints) {
         std::string s(constraints);
