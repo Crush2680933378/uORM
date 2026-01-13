@@ -139,7 +139,7 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-install(TARGETS uorm 
+install(TARGETS uorm ujson
   EXPORT uORMTargets 
   RUNTIME DESTINATION bin 
   LIBRARY DESTINATION lib 
@@ -147,6 +147,7 @@ install(TARGETS uorm
 ) 
 
 install(DIRECTORY include/ DESTINATION include) 
+install(DIRECTORY thirdparty/uJSON/include/ DESTINATION include) 
 
 # Config files
 write_basic_package_version_file(
