@@ -1,0 +1,26 @@
+body {
+  margin: 0;
+  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  background: #f5f6fa;
+}
+
+.result-table .ant-table-cell {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+}
+
+.sql-editor {
+  width: 100%;
+  min-height: 140px;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  padding: 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.sql-editor:focus {
+  outline: none;
+  border-color: #2563eb;
+}
