@@ -19,14 +19,13 @@ class Schema {
 public:
     // 根据类型 T 的元数据创建数据库表
     template<typename T>
-    static bool createTable() {
+    static bool createTable(IConnection& conn) {
         if constexpr (!is_registered_v<T>) {
             static_assert(is_registered_v<T>, "类型必须使用 UORM_TABLE 宏进行注册");
             return false;
         }
 
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+        auto dialect = conn.dialect();
 
         std::stringstream ss;
         ss << "CREATE TABLE IF NOT EXISTS " << dialect->quoteIdentifier(TableMeta<T>::name) << " (";
@@ -56,16 +55,27 @@ public:
         // 追加表选项 (如 ENGINE, CHARSET 等)，方言会自动忽略不支持项
         ss << ") " << dialect->getTableOptions(TableMeta<T>::options) << ";";
 
-        return execute(connPtr, ss.str());
+        return execute(conn, ss.str());
+    }
+
+    template<typename T>
+    static bool createTable() {
+        auto connPtr = ConnectionPool::instance().getConnection();
+        return createTable<T>(*connPtr);
     }
 
     // 删除表
     template<typename T>
+    static bool dropTable(IConnection& conn) {
+        auto dialect = conn.dialect();
+        std::string sql = "DROP TABLE IF EXISTS " + dialect->quoteIdentifier(TableMeta<T>::name) + ";";
+        return execute(conn, sql);
+    }
+
+    template<typename T>
     static bool dropTable() {
         auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
-        std::string sql = "DROP TABLE IF EXISTS " + dialect->quoteIdentifier(TableMeta<T>::name) + ";";
-        return execute(connPtr, sql);
+        return dropTable<T>(*connPtr);
     }
 
 private:
@@ -119,10 +129,9 @@ private:
     }
 
     // 执行 SQL 语句
-    static bool execute(std::unique_ptr<IConnection, std::function<void(IConnection*)>>& connPtr,
-                        const std::string& sql) {
+    static bool execute(IConnection& conn, const std::string& sql) {
         try {
-            auto stmt = connPtr->createStatement();
+            auto stmt = conn.createStatement();
             stmt->execute(sql);
             return true;
         } catch (const Exception& e) {
