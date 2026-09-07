@@ -46,6 +46,43 @@ inline SqlValue sqliteCellValue(sqlite3_stmt* stmt, int col) {
 } // namespace detail
 
 // ---------------------------------------------------------------------------
+// 结果集（物化到内存：支持语句重复执行；列值取自缓存的 SqlValue）
+// ---------------------------------------------------------------------------
+class SQLiteMaterializedResultSet : public IResultSet {
+public:
+    bool next() override { return ++row_ < static_cast<long long>(rows_.size()); }
+    std::size_t columnCount() const override { return names_.size(); }
+    std::string columnName(std::size_t index) const override { return names_.at(index); }
+
+    SqlValue getSqlValue(std::size_t index) override {
+        if (index >= names_.size()) throw SqlError("SQLite column index out of range");
+        if (row_ < 0 || row_ >= static_cast<long long>(rows_.size()))
+            throw SqlError("SQLite: call next() before reading values");
+        return rows_[static_cast<std::size_t>(row_)][index];
+    }
+
+    void addColumn(const std::string& name) { names_.push_back(name); }
+    void addRow(sqlite3_stmt* stmt, int columnCount) {
+        std::vector<SqlValue> row;
+        row.reserve(static_cast<std::size_t>(columnCount));
+        for (int c = 0; c < columnCount; ++c) row.push_back(detail::sqliteCellValue(stmt, c));
+        rows_.push_back(std::move(row));
+    }
+
+protected:
+    long long columnIndex(const std::string& colName) const override {
+        for (std::size_t i = 0; i < names_.size(); ++i)
+            if (names_[i] == colName) return static_cast<long long>(i);
+        return -1;
+    }
+
+private:
+    std::vector<std::string> names_;
+    std::vector<std::vector<SqlValue>> rows_;
+    long long row_ = -1;
+};
+
+// ---------------------------------------------------------------------------
 // 结果集（预编译语句逐步读取）
 // ---------------------------------------------------------------------------
 class SQLiteResultSet : public IResultSet {
@@ -166,11 +203,24 @@ public:
     }
 
     std::unique_ptr<IResultSet> executeQuery() override {
-        // 不在此处 step：首行必须留给调用方（否则会吞掉第一行结果）。
-        // 结果集接管 stmt_ 的所有权，错误在首次 next() 时抛出。
-        auto* rs = new SQLiteResultSet(db_, stmt_, sql_);
-        stmt_ = nullptr;
-        return std::unique_ptr<IResultSet>(rs);
+        // 物化全部行：语句保持所有权，可重复绑定执行（C ABI 场景需要复用）。
+        int columnCount = sqlite3_column_count(stmt_);
+        auto out = std::make_unique<SQLiteMaterializedResultSet>();
+        for (int c = 0; c < columnCount; ++c) {
+            const char* name = sqlite3_column_name(stmt_, c);
+            out->addColumn(name ? name : "");
+        }
+        int rc = sqlite3_step(stmt_);
+        while (rc == SQLITE_ROW) {
+            out->addRow(stmt_, columnCount);
+            rc = sqlite3_step(stmt_);
+        }
+        sqlite3_reset(stmt_);
+        if (rc != SQLITE_DONE) {
+            std::string err = sqlite3_errmsg(db_);
+            throw SqlError("SQLite step error: " + err + " [SQL: " + sql_ + "]");
+        }
+        return std::unique_ptr<IResultSet>(out.release());
     }
 
     void setNull(int index) override {
