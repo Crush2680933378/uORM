@@ -26,6 +26,9 @@ namespace web {
 
 class HttpServer {
 public:
+    // 通用分发器：可传 Router&，也可传自定义处理函数（如 API + 静态兜底组合）
+    using Dispatcher = std::function<HttpResponse(const HttpRequest&)>;
+
     struct Config {
         std::string address = "0.0.0.0";
         unsigned short port = 8080;
@@ -33,7 +36,11 @@ public:
         int keepAliveTimeoutSec = 65;
     };
 
-    explicit HttpServer(Router& router, Config cfg) : router_(router), config_(std::move(cfg)) {}
+    explicit HttpServer(Dispatcher dispatcher, Config cfg)
+        : dispatcher_(std::move(dispatcher)), config_(std::move(cfg)) {}
+
+    explicit HttpServer(Router& router, Config cfg)
+        : HttpServer([&router](const HttpRequest& req) { return router.dispatch(req); }, std::move(cfg)) {}
 
     // 阻塞运行（内部启动 IO 线程后 join）
     void run() {
@@ -132,7 +139,7 @@ private:
                 // 4. 路由分发
                 HttpResponse resp;
                 try {
-                    resp = router_.dispatch(req);
+                    resp = dispatcher_(req);
                 } catch (const std::exception& e) {
                     resp = HttpResponse::error(500, e.what());
                 }
@@ -182,7 +189,7 @@ private:
         asio::write(socket, asio::buffer(data), ec);
     }
 
-    Router& router_;
+    Dispatcher dispatcher_;
     Config config_;
     std::unique_ptr<asio::io_context> ioc_;
     std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
