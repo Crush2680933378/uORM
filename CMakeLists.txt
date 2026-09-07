@@ -11,6 +11,16 @@ option(UORM_BUILD_TESTS "Build uORM tests" OFF)
 option(UORM_ENABLE_MYSQL "Enable MySQL driver (libmariadb / libmysqlclient)" ON)
 option(UORM_ENABLE_POSTGRESQL "Enable PostgreSQL driver (libpq)" ON)
 option(UORM_ENABLE_SQLITE "Enable SQLite driver (sqlite3)" ON)
+option(UORM_ENABLE_WEB "Enable Web console (requires asio)" ON)
+
+# Web console 依赖的 standalone asio
+if(UORM_ENABLE_WEB)
+    find_path(UORM_ASIO_INCLUDE_DIR asio.hpp)
+    if(NOT UORM_ASIO_INCLUDE_DIR)
+        message(WARNING "uORM: asio not found, web console disabled")
+        set(UORM_ENABLE_WEB OFF)
+    endif()
+endif()
 
 # uORM 是 header-only 库：驱动在编译期按可用性编入，运行期按名字选择
 add_library(uorm INTERFACE)
@@ -84,12 +94,30 @@ if(UNIX)
     target_link_libraries(uorm INTERFACE Threads::Threads)
 endif()
 
+# Web console (standalone asio)
+if(UORM_ENABLE_WEB)
+    add_library(uorm_web INTERFACE)
+    add_library(uORM::web ALIAS uorm_web)
+    target_link_libraries(uorm_web INTERFACE uORM::uorm)
+    if(WIN32)
+        target_link_libraries(uorm_web INTERFACE ws2_32 mswsock)
+    endif()
+    if(UNIX)
+        target_link_libraries(uorm_web INTERFACE pthread)
+    endif()
+endif()
+
 # Examples
 if(BUILD_EXAMPLES)
   add_executable(uORM_example
       examples/full_usage_example.cpp
   )
   target_link_libraries(uORM_example PRIVATE uORM::uorm)
+
+  if(UORM_ENABLE_WEB)
+    add_executable(uORM_http_demo examples/http_demo.cpp)
+    target_link_libraries(uORM_http_demo PRIVATE uORM::web)
+  endif()
 endif()
 
 # Installation
