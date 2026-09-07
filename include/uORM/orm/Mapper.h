@@ -460,23 +460,35 @@ public:
         // 无主键或自增主键仍为默认值：普通 insert
         if (pkCol.empty() || pkIsDefault) return save(entity, conn);
 
+        // upsert 路径：主键列必须参与 INSERT（否则 ON CONFLICT 永远不命中）
+        auto includeInUpsert = [&entity](auto&& field) {
+            if (std::string(field.constraint_sql).find("PRIMARY KEY") != std::string::npos) return true;
+            if (std::string(field.constraint_sql).find("AUTO_INCREMENT") != std::string::npos) return false;
+            using FieldType = typename std::decay_t<decltype(field)>::Type;
+            if constexpr (std::is_same_v<FieldType, std::string>) {
+                if ((entity.*(field.member_ptr)).empty() &&
+                    std::string(field.constraint_sql).find("DEFAULT") != std::string::npos) return false;
+            }
+            return true;
+        };
+
         // 收集参与 INSERT 的列（含主键列）
         std::stringstream ss;
         ss << "INSERT INTO " << dialect->quoteIdentifier(TableMeta<T>::name) << " (";
         bool first = true;
         std::apply([&](auto&&... field) {
-            ((  (shouldSkipInsert(field, entity) ? 0 : (
+            ((  (includeInUpsert(field) ? (
                     ss << (first ? "" : ", ") << dialect->quoteIdentifier(field.column_name),
                     first = false
-                )) ), ...);
+                ) : 0) ), ...);
         }, fields);
         ss << ") VALUES (";
         first = true;
         std::apply([&](auto&&... field) {
-            ((  (shouldSkipInsert(field, entity) ? 0 : (
+            ((  (includeInUpsert(field) ? (
                     ss << (first ? "" : ", ") << "?",
                     first = false
-                )) ), ...);
+                ) : 0) ), ...);
         }, fields);
         ss << ")";
 
@@ -488,22 +500,22 @@ public:
         }
         first = true;
         std::apply([&](auto&&... field) {
-            ((  (shouldSkipInsert(field, entity) || isPrimaryKey(field.constraint_sql) ? 0 : (
+            ((  (includeInUpsert(field) && !isPrimaryKey(field.constraint_sql) ? (
                     ss << (first ? "" : ", "),
                     ss << (dialect->kind() == DialectKind::MySQL
                         ? dialect->quoteIdentifier(field.column_name) + "=VALUES(" + dialect->quoteIdentifier(field.column_name) + ")"
                         : dialect->quoteIdentifier(field.column_name) + "=EXCLUDED." + dialect->quoteIdentifier(field.column_name)),
                     first = false
-                )) ), ...);
+                ) : 0) ), ...);
         }, fields);
 
         try {
             auto pstmt = conn.prepareStatement(ss.str());
             int index = 1;
             std::apply([&](auto&&... field) {
-                ((  (shouldSkipInsert(field, entity) ? 0 : (
+                ((  (includeInUpsert(field) ? (
                         uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
-                    )) ), ...);
+                    ) : 0) ), ...);
             }, fields);
             pstmt->executeUpdate();
             return true;
