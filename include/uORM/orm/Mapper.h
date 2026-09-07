@@ -7,6 +7,7 @@
 
 #include "uORM/orm/Reflection.h"
 #include "uORM/orm/Bind.h"
+#include "uORM/orm/QueryResult.h"
 #include "uORM/driver/ConnectionPool.h"
 #include "uORM/orm/Transaction.h"
 #include <string>
@@ -292,18 +293,38 @@ public:
     static std::vector<T> select(IConnection& conn, const Query& query) {
         auto dialect = conn.dialect();
 
-        std::string sql = "SELECT * FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
-
-        std::string where = query.getWhere();
-        if (!where.empty()) {
-            sql += " WHERE " + where;
-        }
-
-        sql += query.getOrderBy();
-        sql += query.getLimit();
-        sql += query.getOffset();
+        std::string sql = buildSelectSql(dialect, query);
 
         return queryRowsWithParams(conn, sql, query.getParams());
+    }
+
+    // 动态查询：返回通用结果集（配合 join/聚合投影，不做实体映射）
+    static QueryResult selectDynamic(IConnection& conn, const Query& query) {
+        auto dialect = conn.dialect();
+        std::string sql = buildSelectSql(dialect, query);
+        auto pstmt = conn.prepareStatement(sql);
+        const auto& params = query.getParams();
+        for (size_t i = 0; i < params.size(); ++i) {
+            uORM::bindSqlValue(pstmt.get(), static_cast<int>(i + 1), params[i]);
+        }
+        auto rs = pstmt->executeQuery();
+
+        QueryResult out;
+        const std::size_t n = rs->columnCount();
+        out.columns.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) out.columns.push_back(rs->columnName(i));
+        while (rs->next()) {
+            std::vector<SqlValue> row;
+            row.reserve(n);
+            for (std::size_t i = 0; i < n; ++i) row.push_back(rs->getSqlValue(i));
+            out.rows.push_back(std::move(row));
+        }
+        return out;
+    }
+
+    static QueryResult selectDynamic(const Query& query) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return selectDynamic(*conn, query);
     }
 
     static std::vector<T> select(const Query& query) {
@@ -357,7 +378,189 @@ public:
         return count(*conn, query);
     }
 
+    // ---------------- 聚合 ----------------
+    // funcExpr 为聚合表达式，如 "COUNT(*)"、"SUM(price)"、"MAX(age)"
+    static SqlValue aggregate(IConnection& conn, const std::string& funcExpr, const Query& query = Query()) {
+        auto dialect = conn.dialect();
+
+        std::string sql = "SELECT " + funcExpr + " AS agg_val FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
+        std::string where = query.getWhere();
+        if (!where.empty()) sql += " WHERE " + where;
+
+        try {
+            auto pstmt = conn.prepareStatement(sql);
+            const auto& params = query.getParams();
+            for (size_t i = 0; i < params.size(); ++i) {
+                uORM::bindSqlValue(pstmt.get(), static_cast<int>(i + 1), params[i]);
+            }
+            auto res = pstmt->executeQuery();
+            if (res->next()) return res->getSqlValue(std::string("agg_val"));
+        } catch (const uORM::Exception&) {
+            throw;
+        } catch (const std::string& e) { throw SqlError(e); }
+          catch (const std::exception& e) {
+            throw SqlError(std::string("聚合查询失败: ") + e.what());
+        }
+        return nullptr;
+    }
+
+    static SqlValue aggregate(const std::string& funcExpr, const Query& query = Query()) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return aggregate(*conn, funcExpr, query);
+    }
+
+    static double sum(IConnection& conn, const std::string& col, const Query& q = Query()) {
+        return valueToDouble(aggregate(conn, "SUM(" + col + ")", q));
+    }
+    static double sum(const std::string& col, const Query& q = Query()) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return sum(*conn, col, q);
+    }
+
+    static double avg(IConnection& conn, const std::string& col, const Query& q = Query()) {
+        return valueToDouble(aggregate(conn, "AVG(" + col + ")", q));
+    }
+    static double avg(const std::string& col, const Query& q = Query()) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return avg(*conn, col, q);
+    }
+
+    static SqlValue max(IConnection& conn, const std::string& col, const Query& q = Query()) {
+        return aggregate(conn, "MAX(" + col + ")", q);
+    }
+    static SqlValue max(const std::string& col, const Query& q = Query()) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return max(*conn, col, q);
+    }
+
+    static SqlValue min(IConnection& conn, const std::string& col, const Query& q = Query()) {
+        return aggregate(conn, "MIN(" + col + ")", q);
+    }
+    static SqlValue min(const std::string& col, const Query& q = Query()) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return min(*conn, col, q);
+    }
+
+    // ---------------- Upsert ----------------
+    // 按主键冲突时更新：MySQL 用 ON DUPLICATE KEY UPDATE，PG/SQLite 用 ON CONFLICT DO UPDATE
+    // 主键为自增且值为 0（默认值）时退化为普通 insert
+    static bool saveOrUpdate(T& entity, IConnection& conn) {
+        auto dialect = conn.dialect();
+        auto fields = TableMeta<T>::get_fields();
+
+        std::string pkCol;
+        bool pkIsDefault = true;
+        std::apply([&](auto&&... field) {
+            ((  (isPrimaryKey(field.constraint_sql) ? (
+                    pkCol = field.column_name,
+                    pkIsDefault = primaryKeyHasDefault(entity.*(field.member_ptr))
+                ) : 0) ), ...);
+        }, fields);
+
+        // 无主键或自增主键仍为默认值：普通 insert
+        if (pkCol.empty() || pkIsDefault) return save(entity, conn);
+
+        // 收集参与 INSERT 的列（含主键列）
+        std::stringstream ss;
+        ss << "INSERT INTO " << dialect->quoteIdentifier(TableMeta<T>::name) << " (";
+        bool first = true;
+        std::apply([&](auto&&... field) {
+            ((  (shouldSkipInsert(field, entity) ? 0 : (
+                    ss << (first ? "" : ", ") << dialect->quoteIdentifier(field.column_name),
+                    first = false
+                )) ), ...);
+        }, fields);
+        ss << ") VALUES (";
+        first = true;
+        std::apply([&](auto&&... field) {
+            ((  (shouldSkipInsert(field, entity) ? 0 : (
+                    ss << (first ? "" : ", ") << "?",
+                    first = false
+                )) ), ...);
+        }, fields);
+        ss << ")";
+
+        // 冲突处理子句
+        if (dialect->kind() == DialectKind::MySQL) {
+            ss << " ON DUPLICATE KEY UPDATE ";
+        } else {
+            ss << " ON CONFLICT (" << dialect->quoteIdentifier(pkCol) << ") DO UPDATE SET ";
+        }
+        first = true;
+        std::apply([&](auto&&... field) {
+            ((  (shouldSkipInsert(field, entity) || isPrimaryKey(field.constraint_sql) ? 0 : (
+                    ss << (first ? "" : ", "),
+                    ss << (dialect->kind() == DialectKind::MySQL
+                        ? dialect->quoteIdentifier(field.column_name) + "=VALUES(" + dialect->quoteIdentifier(field.column_name) + ")"
+                        : dialect->quoteIdentifier(field.column_name) + "=EXCLUDED." + dialect->quoteIdentifier(field.column_name)),
+                    first = false
+                )) ), ...);
+        }, fields);
+
+        try {
+            auto pstmt = conn.prepareStatement(ss.str());
+            int index = 1;
+            std::apply([&](auto&&... field) {
+                ((  (shouldSkipInsert(field, entity) ? 0 : (
+                        uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
+                    )) ), ...);
+            }, fields);
+            pstmt->executeUpdate();
+            return true;
+        } catch (const uORM::Exception&) {
+            throw;
+        } catch (const std::exception& e) {
+            throw SqlError(std::string("Upsert失败: ") + e.what());
+        }
+    }
+
+    static bool saveOrUpdate(T& entity) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return saveOrUpdate(entity, *conn);
+    }
+
 private:
+    // 构建 SELECT 语句（投影/去重/连接/分组/聚合全量支持）
+    static std::string buildSelectSql(const std::shared_ptr<ISqlDialect>& dialect, const Query& query) {
+        std::string sql = "SELECT ";
+        if (query.isDistinct()) sql += "DISTINCT ";
+
+        if (!query.getSelectRaw().empty()) {
+            sql += query.getSelectRaw();
+        } else if (!query.getColumns().empty()) {
+            bool first = true;
+            for (const auto& col : query.getColumns()) {
+                if (!first) sql += ", ";
+                sql += dialect->quoteIdentifier(col);
+                first = false;
+            }
+        } else {
+            sql += "*";
+        }
+
+        sql += " FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
+        sql += query.getJoins();
+
+        std::string where = query.getWhere();
+        if (!where.empty()) sql += " WHERE " + where;
+
+        sql += query.getGroupBy();
+        sql += query.getHaving();
+        sql += query.getOrderBy();
+        sql += query.getLimit();
+        sql += query.getOffset();
+        return sql;
+    }
+
+    // 主键是否仍为默认值（0 / 空串）——决定 upsert 还是 insert
+    template<typename V>
+    static bool primaryKeyHasDefault(const V& value) {
+        if constexpr (std::is_integral_v<V>) return value == 0;
+        else if constexpr (std::is_floating_point_v<V>) return value == 0.0;
+        else if constexpr (std::is_same_v<V, std::string>) return value.empty();
+        else return false;
+    }
+
     static bool hasDefaultConstraint(const char* constraints) {
         std::string s(constraints);
         return s.find("DEFAULT") != std::string::npos;

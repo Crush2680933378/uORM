@@ -191,6 +191,16 @@ void demonstrateCRUD() {
 }
 
 // ==========================================
+// 标签表：UORM_REFLECTION 简写宏演示
+// 列名=成员名，名为 id 的成员自动成为自增主键
+// ==========================================
+struct Tag {
+    int id;
+    std::string name;
+};
+UORM_REFLECTION(Tag, id, name)
+
+// ==========================================
 // 5. 事务与原生查询演示
 // ==========================================
 void demonstrateTransactionAndRawQuery() {
@@ -245,6 +255,67 @@ void demonstrateTransactionAndRawQuery() {
     }
 }
 
+// ==========================================
+// 6. 高级查询演示（投影/分组/聚合/括号分组/upsert）
+// ==========================================
+void demonstrateAdvancedQuery() {
+    std::cout << "\n=== 演示高级查询 ===" << std::endl;
+    auto& ds = uORM::ConnectionPool::instance().source();
+
+    // UORM_REFLECTION 宏实体
+    uORM::Schema::createTable<Tag>();
+    Tag t{0, "urgent"};
+    uORM::Mapper<Tag>::save(t);
+    std::cout << "[REFLECTION宏] Tag 保存成功 id=" << t.id << std::endl;
+
+    // 分组 + 聚合投影：每个分类的商品数与均价（AVG 保持原始精度，展示层自行舍入）
+    {
+        uORM::Query q;
+        q.selectRaw("category, COUNT(*) AS cnt, AVG(price) AS avg_price")
+         .groupBy("category")
+         .having("COUNT(*) >= ?").havingParam(uORM::SqlValue{1})
+         .orderBy("cnt", false);
+        auto result = uORM::Mapper<Product>::selectDynamic(q);
+        std::cout << "[分组聚合] 分类 | 数量 | 均价" << std::endl;
+        for (const auto& row : result.rows) {
+            std::cout << "  - " << uORM::valueToString(row[0])
+                      << " | " << uORM::valueToInt64(row[1])
+                      << " | " << uORM::valueToDouble(row[2]) << std::endl;
+        }
+    }
+
+    // 括号分组: (stock < 30) AND (is_active = 1 AND (price > 50 OR name LIKE '%Pro%'))
+    {
+        uORM::Query q;
+        q.lt("stock", 1000)
+         .beginGroup().gt("price", 50).or_().like("name", "%Pro%").endGroup();
+        auto rows = uORM::Mapper<Product>::select(q);
+        std::cout << "[括号分组] 命中 " << rows.size() << " 条: ";
+        for (const auto& p : rows) std::cout << p.name << " ";
+        std::cout << std::endl;
+    }
+
+    // 聚合便捷函数
+    {
+        std::cout << "[聚合] 总库存=" << uORM::Mapper<Product>::sum("stock")
+                  << " 平均价=" << uORM::Mapper<Product>::avg("price")
+                  << " 最高价=" << uORM::valueToDouble(uORM::Mapper<Product>::max("price"))
+                  << std::endl;
+    }
+
+    // Upsert: 按主键存在则更新
+    {
+        uORM::Query q2;
+        q2.eq("name", "Transaction Item");
+        auto item = uORM::Mapper<Product>::selectOne(q2);
+        if (item) {
+            item->price = 9.9;
+            uORM::Mapper<Product>::saveOrUpdate(*item);
+            std::cout << "[Upsert] Transaction Item 价格更新为 9.9" << std::endl;
+        }
+    }
+}
+
 int main() {
     // 1. 读取配置
     try {
@@ -273,6 +344,7 @@ int main() {
     demonstrateCRUD();
     demonstrateQueryBuilder();
     demonstrateTransactionAndRawQuery();
+    demonstrateAdvancedQuery();
 
     return 0;
 }
