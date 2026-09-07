@@ -10,7 +10,7 @@ option(BUILD_EXAMPLES "Build uORM examples" ON)
 option(UORM_BUILD_TESTS "Build uORM tests" OFF)
 option(UORM_ENABLE_MYSQL "Enable MySQL driver (libmariadb / libmysqlclient)" ON)
 option(UORM_ENABLE_POSTGRESQL "Enable PostgreSQL driver (libpq)" ON)
-option(UORM_ENABLE_SQLITE "Enable SQLite driver (sqlite3)" OFF)
+option(UORM_ENABLE_SQLITE "Enable SQLite driver (sqlite3)" ON)
 
 # uORM 是 header-only 库：驱动在编译期按可用性编入，运行期按名字选择
 add_library(uorm INTERFACE)
@@ -76,6 +76,7 @@ if(UORM_ENABLE_SQLITE)
         message(WARNING "uORM: sqlite3 not found, SQLite driver disabled")
     endif()
 endif()
+
 
 # Linux threading support
 if(UNIX)
