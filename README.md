@@ -175,6 +175,52 @@ cd webapp && npm install && npm run build
 | POST | `/api/connections/{id}/query` | `{sql, params?, maxRows?}` 查询 |
 | POST | `/api/connections/{id}/execute` | `{sql, params?}` DML/DDL |
 
+## 🌐 C ABI 接口（跨语言绑定）
+
+uORM 的整个 C++ 内核编译进一个动态库 `uorm_c`（`uorm_c.dll` / `libuorm_c.so`），对外只暴露 `include/uORM/abi/uorm_c.h` 中的 **纯 C 稳定符号**——任何能调 C 的语言（C/C++/Python/Rust/Go/C#/Java/JNI…）都可以直接使用，不受 C++ 编译器与 STL 版本差异影响。
+
+分层模型：
+
+| 句柄 | 含义 | 生命周期 |
+| :--- | :--- | :--- |
+| `uorm_data_source` | 一个数据库 + 有界连接池（线程安全） | 手动 `uorm_ds_destroy` |
+| `uorm_connection` | 从池借出的连接（事务/语句复用） | `uorm_conn_release` 归还池 |
+| `uorm_statement` | 预编译语句，可重复绑定执行 | `uorm_stmt_destroy`（先于连接归还） |
+| `uorm_result` | 查询结果（列名 + 行） | `uorm_result_destroy`；字符串由结果集持有（零拷贝） |
+
+所有调用失败返回负错误码（`uorm_status`），详情通过 `uorm_last_error()` 获取（线程局部）。
+
+C 侧最小示例：
+
+```c
+#include <uORM/abi/uorm_c.h>
+
+uorm_ds_options opt = {0};
+opt.driver = "sqlite";              /* 运行时选择驱动 */
+opt.database = "app.db";
+uorm_data_source* ds = uorm_ds_create(&opt);
+
+uorm_param p = { UORM_TYPE_STRING, .s = "Alice" };
+uorm_result* rs = NULL;
+uorm_ds_query(ds, "SELECT id, name FROM users WHERE name = ?", &p, 1, &rs);
+
+for (int r = 0; r < uorm_result_row_count(rs); ++r)
+    printf("%lld %s\n", uorm_value_int64(rs, r, 0), uorm_value_string(rs, r, 1));
+
+uorm_result_destroy(rs);
+uorm_ds_destroy(ds);
+```
+
+完整示例见 [`examples/c_demo.c`](examples/c_demo.c)（事务/预编译语句/错误处理）与 [`examples/python_ctypes_demo.py`](examples/python_ctypes_demo.py)（Python ctypes，零编译直接运行）：
+
+```bash
+python examples/python_ctypes_demo.py
+# uORM 版本: 0.4.0
+# 查询结果 2 行 x 3 列: ['id', 'name', 'price']
+```
+
+构建开关：`UORM_BUILD_C_ABI`（默认 `ON`）。集成到其他项目：链接 `uORM::c` 目标或直接分发 `uorm_c` 动态库 + 头文件。
+
 ## 🔨 构建与测试
 
 ```bash
@@ -203,7 +249,8 @@ UORM_TEST_PG_HOST=127.0.0.1 UORM_TEST_PG_USER=postgres UORM_TEST_PG_PASS=xxx UOR
 | `UORM_ENABLE_POSTGRESQL` | `ON` | PostgreSQL 驱动（找到 libpq 才生效） |
 | `UORM_ENABLE_SQLITE` | `ON` | SQLite 驱动 |
 | `UORM_ENABLE_WEB` | `ON` | Web 控制台（找到 asio 才生效） |
-| `UORM_BUILD_TESTS` | `OFF` | 构建测试 |
+| `UORM_BUILD_C_ABI` | `ON` | C ABI 动态库 `uorm_c` |
+| `UORM_BUILD_TESTS` | `OFF` | 构建测试（含纯 C 的 `uorm_test_c_abi`） |
 | `BUILD_EXAMPLES` | `ON` | 构建示例 |
 
 缺失的依赖自动降级（仅告警），至少 SQLite 驱动可保证开箱即用。
@@ -227,10 +274,12 @@ uORM/
 ├── include/uORM/
 │   ├── orm/          # Reflection/Mapper/Query/Schema/Transaction/QueryResult/Bind
 │   ├── driver/       # DBInterfaces/DriverRegistry/DataSource/SqlDialect + 各驱动实现
-│   └── web/          # HttpServer/Router/Http/ConnectionManager/StaticFiles/JsonUtil
+│   ├── web/          # HttpServer/Router/Http/ConnectionManager/StaticFiles/JsonUtil
+│   └── abi/          # uorm_c.h —— 纯 C ABI 稳定接口
+├── src/              # uorm_c.cpp（C ABI 实现，内核唯一的编译单元）
 ├── webapp/           # React (Vite + AntD) 前端
-├── examples/         # full_usage_example / http_demo / webconsole
-├── tests/            # doctest 单元测试 + 三库集成测试
+├── examples/         # full_usage_example / http_demo / webconsole / c_demo / python_ctypes_demo
+├── tests/            # doctest 单元测试 + 三库集成测试 + 纯 C ABI 测试
 └── thirdparty/uJSON  # JSON 库子模块
 ```
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(uORM CXX)
+project(uORM C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,7 @@ option(UORM_ENABLE_MYSQL "Enable MySQL driver (libmariadb / libmysqlclient)" ON)
 option(UORM_ENABLE_POSTGRESQL "Enable PostgreSQL driver (libpq)" ON)
 option(UORM_ENABLE_SQLITE "Enable SQLite driver (sqlite3)" ON)
 option(UORM_ENABLE_WEB "Enable Web console (requires asio)" ON)
+option(UORM_BUILD_C_ABI "Build the C ABI shared library (uorm_c)" ON)
 
 # Web console 依赖的 standalone asio
 if(UORM_ENABLE_WEB)
@@ -107,6 +108,23 @@ if(UORM_ENABLE_WEB)
     endif()
 endif()
 
+# ---------------- C ABI 动态库 ----------------
+# 整个 C++ 内核编译进 uorm_c 动态库，对外只导出 uorm_c.h 的稳定 C 符号。
+if(UORM_BUILD_C_ABI)
+    add_library(uorm_c SHARED src/uorm_c.cpp)
+    add_library(uORM::c ALIAS uorm_c)
+    target_compile_definitions(uorm_c PRIVATE UORM_C_BUILDING)
+    target_compile_definitions(uorm_c PUBLIC UORM_C_SHARED)
+    target_include_directories(uorm_c PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_link_libraries(uorm_c PRIVATE uORM::uorm)
+    if(UNIX)
+        target_link_libraries(uorm_c PRIVATE Threads::Threads)
+    endif()
+endif()
+
 # Examples
 if(BUILD_EXAMPLES)
   add_executable(uORM_example
@@ -120,6 +138,11 @@ if(BUILD_EXAMPLES)
 
     add_executable(uORM_webconsole examples/webconsole.cpp)
     target_link_libraries(uORM_webconsole PRIVATE uORM::web)
+  endif()
+
+  if(UORM_BUILD_C_ABI)
+    add_executable(uORM_c_demo examples/c_demo.c)
+    target_link_libraries(uORM_c_demo PRIVATE uorm_c)
   endif()
 endif()
 
@@ -136,6 +159,11 @@ if(UORM_BUILD_TESTS)
         target_link_libraries(uorm_${t} PRIVATE uORM::uorm)
         add_test(NAME ${t} COMMAND uorm_${t})
     endforeach()
+    if(UORM_BUILD_C_ABI)
+        add_executable(uorm_test_c_abi tests/test_c_abi.c)
+        target_link_libraries(uorm_test_c_abi PRIVATE uorm_c)
+        add_test(NAME test_c_abi COMMAND uorm_test_c_abi)
+    endif()
 endif()
 
 # Installation
@@ -148,6 +176,14 @@ install(TARGETS uorm ujson
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
 )
+
+if(UORM_BUILD_C_ABI)
+  install(TARGETS uorm_c
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+  )
+endif()
 
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY thirdparty/uJSON/include/ DESTINATION include)

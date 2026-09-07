@@ -83,14 +83,13 @@ public:
                 lock.unlock();
                 IConnection* conn = nullptr;
                 try {
-                    conn = createConnection();
+                    conn = createConnection(); // 成功时内部已计数
                 } catch (const Exception&) {
                     lock.lock();
                     waitUntil(lock, deadline);
                     continue;
                 }
                 lock.lock();
-                ++totalCreated_;
                 ++inUse_;
                 return wrap(conn);
             }
