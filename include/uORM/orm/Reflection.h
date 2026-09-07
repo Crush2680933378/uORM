@@ -1,28 +1,89 @@
-#pragma once 
-#include <string> 
-#include <tuple> 
-#include <vector> 
-#include <type_traits> 
+#pragma once
+#include <string>
+#include <tuple>
+#include <vector>
+#include <type_traits>
 #include <sstream>
 #include <array>
 
-namespace uORM { 
+#include "uORM/driver/SqlDialect.h"
 
-// 类型映射特性：将 C++ 类型映射到 SQL 类型
-template<typename T> struct TypeMapping; 
+namespace uORM {
 
-// 基本类型映射
-template<> struct TypeMapping<int> { static constexpr const char* type = "INT"; }; 
-template<> struct TypeMapping<long> { static constexpr const char* type = "BIGINT"; }; 
-template<> struct TypeMapping<long long> { static constexpr const char* type = "BIGINT"; }; 
-template<> struct TypeMapping<unsigned int> { static constexpr const char* type = "INT UNSIGNED"; }; 
-template<> struct TypeMapping<unsigned long> { static constexpr const char* type = "BIGINT UNSIGNED"; }; 
-template<> struct TypeMapping<unsigned long long> { static constexpr const char* type = "BIGINT UNSIGNED"; }; 
-template<> struct TypeMapping<float> { static constexpr const char* type = "FLOAT"; }; 
-template<> struct TypeMapping<double> { static constexpr const char* type = "DOUBLE"; }; 
-template<> struct TypeMapping<std::string> { static constexpr const char* type = "VARCHAR(255)"; }; 
-template<> struct TypeMapping<bool> { static constexpr const char* type = "TINYINT(1)"; }; 
-// 可根据需要添加更多映射 (例如 chrono 时间类型)
+// 类型映射：将 C++ 类型映射到各数据库的 SQL 类型
+// 说明：主模板 fallback 为 TEXT，未注册类型建议显式使用 UORM_FIELD_TYPE。
+template<typename T> struct SqlTypeNames {
+    static constexpr const char* mysql = "TEXT";
+    static constexpr const char* postgresql = "TEXT";
+    static constexpr const char* sqlite = "TEXT";
+};
+
+template<> struct SqlTypeNames<int> {
+    static constexpr const char* mysql = "INT";
+    static constexpr const char* postgresql = "INTEGER";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<long> {
+    static constexpr const char* mysql = "BIGINT";
+    static constexpr const char* postgresql = "BIGINT";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<long long> {
+    static constexpr const char* mysql = "BIGINT";
+    static constexpr const char* postgresql = "BIGINT";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<unsigned int> {
+    static constexpr const char* mysql = "INT UNSIGNED";
+    static constexpr const char* postgresql = "BIGINT";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<unsigned long> {
+    static constexpr const char* mysql = "BIGINT UNSIGNED";
+    static constexpr const char* postgresql = "NUMERIC(20)";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<unsigned long long> {
+    static constexpr const char* mysql = "BIGINT UNSIGNED";
+    static constexpr const char* postgresql = "NUMERIC(20)";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<float> {
+    static constexpr const char* mysql = "FLOAT";
+    static constexpr const char* postgresql = "REAL";
+    static constexpr const char* sqlite = "REAL";
+};
+template<> struct SqlTypeNames<double> {
+    static constexpr const char* mysql = "DOUBLE";
+    static constexpr const char* postgresql = "DOUBLE PRECISION";
+    static constexpr const char* sqlite = "REAL";
+};
+template<> struct SqlTypeNames<bool> {
+    static constexpr const char* mysql = "TINYINT(1)";
+    static constexpr const char* postgresql = "BOOLEAN";
+    static constexpr const char* sqlite = "INTEGER";
+};
+template<> struct SqlTypeNames<std::string> {
+    static constexpr const char* mysql = "VARCHAR(255)";
+    static constexpr const char* postgresql = "VARCHAR(255)";
+    static constexpr const char* sqlite = "TEXT";
+};
+
+// 按方言取类型名
+template<typename T>
+const char* sqlTypeNameFor(const ISqlDialect& dialect) {
+    switch (dialect.kind()) {
+        case DialectKind::PostgreSQL: return SqlTypeNames<T>::postgresql;
+        case DialectKind::SQLite:     return SqlTypeNames<T>::sqlite;
+        case DialectKind::MySQL:      return SqlTypeNames<T>::mysql;
+    }
+    return SqlTypeNames<T>::mysql;
+}
+
+// 旧接口兼容：默认给 MySQL 风格类型名
+template<typename T> struct TypeMapping {
+    static constexpr const char* type = SqlTypeNames<T>::mysql;
+};
 
 // SQL 约束常量定义
 struct Constraints {
@@ -37,7 +98,7 @@ template<typename Class, typename T>
 struct FieldMeta {
     using Type = T;
     using ClassType = Class;
-    
+
     T Class::* member_ptr; // 成员变量指针
     const char* column_name; // 数据库列名
     const char* constraint_sql; // 原始 SQL 约束字符串，如 "NOT NULL AUTO_INCREMENT"

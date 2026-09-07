@@ -1,150 +1,286 @@
-#pragma once 
-#include "uORM/driver/DBInterfaces.h" 
-#include <pqxx/pqxx> 
-#include <memory> 
-#include <iostream> 
+#pragma once
+// 文件说明：
+// PostgreSQLWrapper 基于官方 libpq C API 实现 IConnection 抽象。
+// - 修复历史 bug：统一 ? 占位符，在底层自动转换为 PG 的 $1/$2/... 风格
+// - 参数以文本格式传输，NULL 语义完整（SqlValue）
+// - 事务 / ping / lastInsertId(SELECT lastval())
 
-namespace uORM { 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#endif
 
-// PostgreSQL 结果集包装 
-class PostgreSQLResultSet : public IResultSet { 
-public: 
-    PostgreSQLResultSet(pqxx::result res) : res_(res), currentRow_(-1) {} 
-    
-    bool next() override { 
-        currentRow_++; 
-        return currentRow_ < res_.size(); 
-    } 
-    
-    int getInt(const std::string& colName) override { 
-        return res_[currentRow_][colName].as<int>(); 
-    } 
-    
-    long long getInt64(const std::string& colName) override { 
-        return res_[currentRow_][colName].as<long long>(); 
-    } 
-    
-    unsigned int getUInt(const std::string& colName) override { 
-        return res_[currentRow_][colName].as<unsigned int>(); 
-    } 
-    
-    std::string getString(const std::string& colName) override { 
-        return res_[currentRow_][colName].as<std::string>(); 
-    } 
-    
-    bool getBoolean(const std::string& colName) override { 
-        return res_[currentRow_][colName].as<bool>(); 
-    } 
-    
-    double getDouble(const std::string& colName) override { 
-        return res_[currentRow_][colName].as<double>(); 
-    } 
+#include "uORM/driver/DBInterfaces.h"
+#include <libpq-fe.h>
+#include <memory>
+#include <vector>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
 
-private: 
-    pqxx::result res_; 
-    int currentRow_; 
-}; 
+namespace uORM {
 
-// PostgreSQL 预编译语句包装 (简单模拟，libpqxx 的 prepared statement 需要事务上下文) 
-// 为了适配接口，我们在这里持有 connection 指针，并在 execute 时创建临时事务或使用传入的事务。 
-// 简化起见，我们暂存 SQL 和参数，在 execute 时执行 params。 
-class PostgreSQLPreparedStatement : public IPreparedStatement { 
-public: 
-    PostgreSQLPreparedStatement(pqxx::connection* conn, const std::string& sql) 
-        : conn_(conn), sql_(sql), params_() {} 
+namespace detail {
 
-    void executeUpdate() override { 
-        pqxx::work w(*conn_); 
-        w.exec_params(sql_, params_); 
-        w.commit(); 
-    } 
+// PostgreSQL OID -> 分类
+inline bool isPgIntOid(Oid t) { return t == 20 /*INT8*/ || t == 21 /*INT2*/ || t == 23 /*INT4*/; }
+inline bool isPgFloatOid(Oid t) {
+    return t == 700 /*FLOAT4*/ || t == 701 /*FLOAT8*/ || t == 1700 /*NUMERIC*/;
+}
+inline bool isPgBoolOid(Oid t) { return t == 16 /*BOOL*/; }
 
-    std::unique_ptr<IResultSet> executeQuery() override { 
-        pqxx::work w(*conn_); 
-        pqxx::result res = w.exec_params(sql_, params_); 
-        w.commit(); 
-        return std::make_unique<PostgreSQLResultSet>(res); 
-    } 
+inline SqlValue parsePgText(Oid type, const char* v) {
+    if (!v) return nullptr;
+    if (isPgBoolOid(type)) return (*v == 't' || *v == '1') ? 1LL : 0LL;
+    if (isPgIntOid(type)) return static_cast<long long>(std::strtoll(v, nullptr, 10));
+    if (isPgFloatOid(type)) return std::strtod(v, nullptr);
+    return std::string(v);
+}
 
-    void setInt(int index, int val) override { addParam(std::to_string(val)); } 
-    void setInt64(int index, long long val) override { addParam(std::to_string(val)); } 
-    void setUInt(int index, unsigned int val) override { addParam(std::to_string(val)); } 
-    void setString(int index, const std::string& val) override { addParam(val); } 
-    void setBoolean(int index, bool val) override { addParam(val ? "true" : "false"); } 
-    void setDouble(int index, double val) override { addParam(std::to_string(val)); } 
+} // namespace detail
 
-private: 
-    void addParam(const std::string& val) { 
-        params_.push_back(val); 
-    } 
+// ---------------------------------------------------------------------------
+// 结果集（libpq 结果一次性返回全部行）
+// ---------------------------------------------------------------------------
+class PostgreSQLResultSet : public IResultSet {
+public:
+    explicit PostgreSQLResultSet(PGresult* res) : res_(res) {
+        nFields_ = static_cast<std::size_t>(PQnfields(res));
+        nTuples_ = static_cast<std::size_t>(PQntuples(res));
+        for (std::size_t i = 0; i < nFields_; ++i) {
+            names_.emplace_back(PQfname(res, static_cast<int>(i)));
+            types_.push_back(PQftype(res, static_cast<int>(i)));
+        }
+    }
 
-    pqxx::connection* conn_; 
-    std::string sql_; 
-    std::vector<std::string> params_; // 简化处理，全转字符串，libpqxx exec_params 支持 
-}; 
+    bool next() override { return ++row_ < static_cast<long long>(nTuples_); }
 
-// PostgreSQL 语句包装 
-class PostgreSQLStatement : public IStatement { 
-public: 
-    PostgreSQLStatement(pqxx::connection* conn) : conn_(conn) {} 
-    
-    void execute(const std::string& sql) override { 
-        pqxx::work w(*conn_); 
-        w.exec0(sql); 
-        w.commit(); 
-    } 
-    
-    std::unique_ptr<IResultSet> executeQuery(const std::string& sql) override { 
-        pqxx::work w(*conn_); 
-        pqxx::result res = w.exec(sql); 
-        w.commit(); 
-        return std::make_unique<PostgreSQLResultSet>(res); 
-    } 
+    std::size_t columnCount() const override { return nFields_; }
+    std::string columnName(std::size_t index) const override { return names_.at(index); }
 
-private: 
-    pqxx::connection* conn_; 
-}; 
+    SqlValue getSqlValue(std::size_t index) override {
+        if (index >= nFields_) throw SqlError("PostgreSQL column index out of range");
+        if (PQgetisnull(res_.get(), static_cast<int>(row_), static_cast<int>(index))) return nullptr;
+        return detail::parsePgText(types_[index], PQgetvalue(res_.get(), static_cast<int>(row_), static_cast<int>(index)));
+    }
 
-// PostgreSQL 连接包装 
-class PostgreSQLConnection : public IConnection { 
-public: 
-    PostgreSQLConnection(const std::string& connStr) { 
-        try { 
-            conn_ = std::make_unique<pqxx::connection>(connStr); 
-        } catch (const std::exception& e) { 
-            std::cerr << "PG Connect Error: " << e.what() << std::endl; 
-            conn_ = nullptr; 
-        } 
-    } 
-    
-    bool isValid() override { 
-        return conn_ && conn_->is_open(); 
-    } 
-    
-    void setSchema(const std::string& db) override { 
-        if (!isValid()) return; 
-        // PG 中 schema 和 database 是不同概念。通常连接时指定 DB。 
-        // 这里假设是切换 search_path 
-        try { 
-            pqxx::work w(*conn_); 
-            w.exec0("SET search_path TO " + db); 
-            w.commit(); 
-        } catch (...) {} 
-    } 
-    
-    std::unique_ptr<IStatement> createStatement() override { 
-        return std::make_unique<PostgreSQLStatement>(conn_.get()); 
-    } 
-    
-    std::unique_ptr<IPreparedStatement> prepareStatement(const std::string& sql) override { 
-        // 转换 SQL 占位符：MySQL 使用 ?，PG 使用 $1, $2... 
-        // 这是一个复杂的转换，这里简单假设用户如果用 PG 驱动，需要自己写兼容的 SQL 或者我们在 ORM 层统一处理。 
-        // 为了演示，我们暂时不处理占位符转换，假设传入的是 $1 格式或者后续完善转换逻辑。 
-        return std::make_unique<PostgreSQLPreparedStatement>(conn_.get(), sql); 
-    } 
+protected:
+    long long columnIndex(const std::string& colName) const override {
+        for (std::size_t i = 0; i < nFields_; ++i)
+            if (names_[i] == colName) return static_cast<long long>(i);
+        return -1;
+    }
 
-private: 
-    std::unique_ptr<pqxx::connection> conn_; 
-}; 
+private:
+    struct ResDeleter { void operator()(PGresult* r) const { if (r) PQclear(r); } };
+    std::unique_ptr<PGresult, ResDeleter> res_;
+    std::size_t nFields_ = 0;
+    std::size_t nTuples_ = 0;
+    long long row_ = -1;
+    std::vector<std::string> names_;
+    std::vector<Oid> types_;
+};
 
-} // namespace uORM 
+// ---------------------------------------------------------------------------
+// 普通语句
+// ---------------------------------------------------------------------------
+class PostgreSQLStatement : public IStatement {
+public:
+    explicit PostgreSQLStatement(PGconn* conn) : conn_(conn) {}
+
+    void execute(const std::string& sql) override {
+        PGresult* r = PQexec(conn_, sql.c_str());
+        checkResult(r, sql);
+        PQclear(r);
+    }
+
+    unsigned long long executeUpdate(const std::string& sql) override {
+        PGresult* r = PQexec(conn_, sql.c_str());
+        checkResult(r, sql);
+        std::string affected = PQcmdTuples(r);
+        PQclear(r);
+        return affected.empty() ? 0 : static_cast<unsigned long long>(std::strtoull(affected.c_str(), nullptr, 10));
+    }
+
+    std::unique_ptr<IResultSet> executeQuery(const std::string& sql) override {
+        PGresult* r = PQexec(conn_, sql.c_str());
+        checkResult(r, sql);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK)
+            throw SqlError("PostgreSQL executeQuery expected rows: " + sql);
+        return std::make_unique<PostgreSQLResultSet>(r);
+    }
+
+private:
+    void checkResult(PGresult* r, const std::string& sql) {
+        if (!r) throw SqlError(std::string("PostgreSQL OOM/error: ") + PQerrorMessage(conn_) + " [SQL: " + sql + "]");
+        ExecStatusType st = PQresultStatus(r);
+        if (st != PGRES_COMMAND_OK && st != PGRES_TUPLES_OK) {
+            std::string err = PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY)
+                                  ? PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY)
+                                  : PQerrorMessage(conn_);
+            PQclear(r);
+            throw SqlError("PostgreSQL error: " + err + " [SQL: " + sql + "]");
+        }
+    }
+
+    PGconn* conn_;
+};
+
+// ---------------------------------------------------------------------------
+// 预编译语句（? -> $n，参数以文本格式传递）
+// ---------------------------------------------------------------------------
+class PostgreSQLPreparedStatement : public IPreparedStatement {
+public:
+    PostgreSQLPreparedStatement(PGconn* conn, const std::string& sql, std::shared_ptr<ISqlDialect> dialect)
+        : conn_(conn), dialect_(std::move(dialect)) {
+        convertedSql_ = dialect_ ? dialect_->convertPlaceholders(sql) : sql;
+    }
+
+    unsigned long long executeUpdate() override {
+        PGresult* r = execParams();
+        std::string affected = PQcmdTuples(r);
+        PQclear(r);
+        return affected.empty() ? 0 : static_cast<unsigned long long>(std::strtoull(affected.c_str(), nullptr, 10));
+    }
+
+    std::unique_ptr<IResultSet> executeQuery() override {
+        PGresult* r = execParams();
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) {
+            std::string err = lastError_;
+            PQclear(r);
+            throw SqlError("PostgreSQL executeQuery error: " + err);
+        }
+        return std::make_unique<PostgreSQLResultSet>(r);
+    }
+
+    void setNull(int index) override {
+        ensureSize(index).isNull = true;
+    }
+    void setInt64(int index, long long val) override {
+        auto& p = ensureSize(index);
+        p.isNull = false; p.text = std::to_string(val);
+    }
+    void setDouble(int index, double val) override {
+        auto& p = ensureSize(index);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.17g", val);
+        p.isNull = false; p.text = buf;
+    }
+    void setString(int index, const std::string& val) override {
+        auto& p = ensureSize(index);
+        p.isNull = false; p.text = val;
+    }
+
+private:
+    struct Param {
+        bool isNull = true;
+        std::string text;
+    };
+
+    Param& ensureSize(int index) {
+        if (index < 1 || static_cast<std::size_t>(index) > 65535)
+            throw SqlError("PostgreSQL bind index out of range");
+        if (static_cast<std::size_t>(index) > params_.size()) params_.resize(static_cast<std::size_t>(index));
+        return params_[static_cast<std::size_t>(index) - 1];
+    }
+
+    PGresult* execParams() {
+        std::size_t n = params_.size();
+        std::vector<const char*> values(n, nullptr);
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!params_[i].isNull) values[i] = params_[i].text.c_str();
+        }
+        PGresult* r = PQexecParams(conn_, convertedSql_.c_str(), static_cast<int>(n),
+                                   nullptr,          // 让服务端自行推断参数类型
+                                   values.data(), nullptr, nullptr, 0 /*文本格式*/);
+        if (!r) throw SqlError(std::string("PostgreSQL error: ") + PQerrorMessage(conn_));
+        if (PQresultStatus(r) != PGRES_COMMAND_OK && PQresultStatus(r) != PGRES_TUPLES_OK) {
+            lastError_ = PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY)
+                             ? PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY)
+                             : PQerrorMessage(conn_);
+        }
+        return r;
+    }
+
+    PGconn* conn_;
+    std::shared_ptr<ISqlDialect> dialect_;
+    std::string convertedSql_;
+    std::vector<Param> params_;
+    std::string lastError_;
+};
+
+// ---------------------------------------------------------------------------
+// 连接
+// ---------------------------------------------------------------------------
+class PostgreSQLConnection : public IConnection {
+public:
+    explicit PostgreSQLConnection(const ConnectionParams& p) {
+        std::string connInfo =
+            "host=" + p.host +
+            " port=" + std::to_string(p.port > 0 ? p.port : 5432) +
+            " dbname=" + p.database +
+            " user=" + p.username +
+            " password=" + p.password +
+            " connect_timeout=10";
+        conn_ = PQconnectdb(connInfo.c_str());
+        if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
+            std::string err = conn_ ? PQerrorMessage(conn_) : "PQconnectdb OOM";
+            close();
+            throw ConnectionError("PostgreSQL connect failed: " + err);
+        }
+        dialect_ = std::make_shared<PostgreSQLDialect>();
+    }
+
+    ~PostgreSQLConnection() override { close(); }
+
+    bool isValid() override { return conn_ && PQstatus(conn_) == CONNECTION_OK; }
+    bool ping() override {
+        if (!conn_) return false;
+        PGresult* r = PQexec(conn_, "SELECT 1");
+        bool ok = r && PQresultStatus(r) == PGRES_TUPLES_OK;
+        if (r) PQclear(r);
+        return ok;
+    }
+
+    void setSchema(const std::string& schema) override {
+        PostgreSQLStatement stmt(conn_);
+        stmt.execute("SET search_path TO " + dialect_->quoteIdentifier(schema));
+    }
+
+    std::shared_ptr<ISqlDialect> dialect() override { return dialect_; }
+
+    std::unique_ptr<IStatement> createStatement() override {
+        return std::make_unique<PostgreSQLStatement>(conn_);
+    }
+
+    std::unique_ptr<IPreparedStatement> prepareStatement(const std::string& sql) override {
+        return std::make_unique<PostgreSQLPreparedStatement>(conn_, sql, dialect_);
+    }
+
+    void begin() override { PostgreSQLStatement(conn_).execute("BEGIN"); }
+    void commit() override { PostgreSQLStatement(conn_).execute("COMMIT"); }
+    void rollback() override { PostgreSQLStatement(conn_).execute("ROLLBACK"); }
+
+    long long lastInsertId() override {
+        try {
+            auto res = PostgreSQLStatement(conn_).executeQuery("SELECT lastval()");
+            if (res->next()) return valueToInt64(res->getSqlValue(0));
+        } catch (const Exception&) {
+            return -1; // 本会话没有使用过序列
+        }
+        return -1;
+    }
+
+private:
+    void close() {
+        if (conn_) {
+            PQfinish(conn_);
+            conn_ = nullptr;
+        }
+    }
+
+    PGconn* conn_ = nullptr;
+    std::shared_ptr<ISqlDialect> dialect_;
+};
+
+} // namespace uORM

@@ -33,14 +33,14 @@ struct Order {
 
 // ==========================================
 // 2. 注册 ORM 映射
-// 映射宏 (类名, 表名)
+// 映射宏 (类名, 表名)。同一份定义可在 MySQL/PostgreSQL/SQLite 上建表
 UORM_TABLE_BEGIN(Product, "products")
     UORM_FIELD(id, "id", PRIMARY KEY AUTO_INCREMENT),
     UORM_FIELD(name, "name", NOT NULL),
     UORM_FIELD(category, "category", NOT NULL),
     UORM_FIELD(price, "price", NOT NULL),
     UORM_FIELD(stock, "stock", DEFAULT 0),
-    UORM_FIELD(is_active, "is_active", DEFAULT 1),
+    UORM_FIELD(is_active, "is_active", DEFAULT TRUE),
     UORM_FIELD_TYPE(created_at, "created_at", "DATETIME", DEFAULT CURRENT_TIMESTAMP)
 UORM_TABLE_END()
 

@@ -30,19 +30,22 @@ public:
 }; 
 
 // 数据库配置数据结构
-struct DataBaseConfigData { 
-    DriverType driver_type = DriverType::MySQL; // 默认为 MySQL
-    std::string hostname; // 主机地址
-    int port;             // 端口号
-    std::string username; // 用户名
-    std::string password; // 密码
-    std::string dataname; // 数据库名
-    int poolsize;         // 连接池大小
-    
-    // 检查配置是否有效
-    bool isValid() const { 
-        return !hostname.empty() && (port > 0 && port < 65535) && !username.empty() && !password.empty() && !dataname.empty() && poolsize > 0; 
-    } 
+struct DataBaseConfigData {
+    std::string driver = "mysql";             // "mysql" / "postgresql" / "sqlite"（运行时驱动选择）
+    DriverType driver_type = DriverType::MySQL; // 兼容旧代码的枚举镜像
+    std::string hostname; // 主机地址（SQLite 忽略）
+    int port = 0;             // 端口号（0 = 驱动默认端口）
+    std::string username; // 用户名（SQLite 忽略）
+    std::string password; // 密码（SQLite 忽略）
+    std::string dataname; // 数据库名；SQLite 为文件路径
+    int poolsize = 5;         // 连接池大小
+
+    // 检查配置是否有效（按驱动类型区分必填项）
+    bool isValid() const {
+        if (poolsize <= 0) return false;
+        if (driver == "sqlite") return !dataname.empty();
+        return !hostname.empty() && (port > 0 && port < 65535) && !username.empty() && !password.empty() && !dataname.empty();
+    }
 }; 
 
 // Redis配置数据结构
@@ -94,36 +97,41 @@ public:
             if (!j.at("DataBaseConfig").is_object()) {
                 throw ConfigurationError("'DataBaseConfig' must be an object");
             }
-            const json db = j.at("DataBaseConfig"); 
-            
-            // 验证每个配置项的存在性和类型
-            if (!db.contains("hostname") || !db.at("hostname").is_string()) throw ConfigurationError("Missing or invalid 'hostname'");
-            if (!db.contains("username") || !db.at("username").is_string()) throw ConfigurationError("Missing or invalid 'username'");
-            if (!db.contains("password") || !db.at("password").is_string()) throw ConfigurationError("Missing or invalid 'password'");
-            if (!db.contains("dataname") || !db.at("dataname").is_string()) throw ConfigurationError("Missing or invalid 'dataname'");
-            if (!db.contains("port") || !db.at("port").is_number_integer()) throw ConfigurationError("Missing or invalid 'port'");
-            if (!db.contains("poolsize") || !db.at("poolsize").is_number_integer()) throw ConfigurationError("Missing or invalid 'poolsize'");
+            const json db = j.at("DataBaseConfig");
 
             // 读取驱动类型，默认为 mysql
+            std::string drv = "mysql";
             if (db.contains("driver") && db.at("driver").is_string()) {
-                std::string drv = db.at("driver").get<std::string>();
-                if (drv == "postgres" || drv == "postgresql") {
-                    databaseconfigdata_.driver_type = DriverType::PostgreSQL;
-                } else {
-                    databaseconfigdata_.driver_type = DriverType::MySQL;
-                }
+                drv = db.at("driver").get<std::string>();
+            }
+            databaseconfigdata_.driver = drv;
+            if (drv == "postgres" || drv == "postgresql") {
+                databaseconfigdata_.driver_type = DriverType::PostgreSQL;
             } else {
                 databaseconfigdata_.driver_type = DriverType::MySQL;
             }
 
-            // 填充配置数据
-            databaseconfigdata_.hostname = db.at("hostname").get<std::string>(); 
-            databaseconfigdata_.port = db.at("port").get<int>(); 
-            databaseconfigdata_.username = db.at("username").get<std::string>(); 
-            databaseconfigdata_.password = db.at("password").get<std::string>(); 
-            databaseconfigdata_.dataname = db.at("dataname").get<std::string>(); 
-            databaseconfigdata_.poolsize = db.at("poolsize").get<int>(); 
-            
+            bool isSqlite = (drv == "sqlite");
+            auto requireString = [&](const char* key) -> std::string {
+                if (!db.contains(key) || !db.at(key).is_string())
+                    throw ConfigurationError(std::string("Missing or invalid '") + key + "'");
+                return db.at(key).get<std::string>();
+            };
+
+            databaseconfigdata_.dataname = requireString("dataname");
+            databaseconfigdata_.username = isSqlite ? "" : requireString("username");
+            databaseconfigdata_.password = isSqlite ? "" : requireString("password");
+            databaseconfigdata_.hostname = isSqlite ? "" : requireString("hostname");
+
+            if (!isSqlite) {
+                if (!db.contains("port") || !db.at("port").is_number_integer())
+                    throw ConfigurationError("Missing or invalid 'port'");
+                databaseconfigdata_.port = db.at("port").get<int>();
+            }
+            if (!db.contains("poolsize") || !db.at("poolsize").is_number_integer())
+                throw ConfigurationError("Missing or invalid 'poolsize'");
+            databaseconfigdata_.poolsize = db.at("poolsize").get<int>();
+
             if (!databaseconfigdata_.isValid()) {
                 throw ConfigurationError("Invalid database configuration values");
             }
