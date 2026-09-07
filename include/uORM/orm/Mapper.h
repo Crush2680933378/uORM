@@ -1,12 +1,14 @@
 #pragma once
 // 文件说明：
-// Mapper 提供实体对象的 CRUD 操作（v2）。
-// - 方言从连接动态获取（同一进程可混用多种数据库）
-// - NULL 语义完整（SqlValue）
-// - save 自动写回自增主键（MySQL: LAST_INSERT_ID；PG/SQLite: RETURNING）
+// Mapper 提供实体对象的 CRUD 操作（v3）。
+// - 所有操作均提供 IConnection& 重载：可在事务内执行（见 Transaction.h）
+//   不带连接参数的版本从默认数据源（ConnectionPool）借连接
+// - 方言从连接动态获取；NULL 语义完整；自增主键自动写回
 
 #include "uORM/orm/Reflection.h"
+#include "uORM/orm/Bind.h"
 #include "uORM/driver/ConnectionPool.h"
+#include "uORM/orm/Transaction.h"
 #include <string>
 #include <vector>
 #include <sstream>
@@ -20,10 +22,10 @@ namespace uORM {
 template<typename T>
 class Mapper {
 public:
-    // 保存实体到数据库 (INSERT)；成功后自增主键自动写回 entity
-    static bool save(T& entity) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    // ---------------- 保存 (INSERT) ----------------
+    // 成功后自增主键自动写回 entity
+    static bool save(T& entity, IConnection& conn) {
+        auto dialect = conn.dialect();
 
         std::stringstream ss;
         ss << "INSERT INTO " << dialect->quoteIdentifier(TableMeta<T>::name) << " (";
@@ -31,7 +33,6 @@ public:
         auto fields = TableMeta<T>::get_fields();
         bool first = true;
 
-        // 构建列名列表，跳过自增列
         std::apply([&](auto&&... field) {
             ((
                 (!shouldSkipInsert(field, entity) ? (
@@ -55,7 +56,6 @@ public:
 
         ss << ")";
 
-        // PG/SQLite 3.35+: RETURNING 主键列
         std::string returningColumn;
         if (dialect->supportsReturningId()) {
             returningColumn = findAutoIncrementColumn(fields);
@@ -65,13 +65,13 @@ public:
         }
 
         try {
-            auto pstmt = connPtr->prepareStatement(ss.str());
+            auto pstmt = conn.prepareStatement(ss.str());
 
             int index = 1;
             std::apply([&](auto&&... field) {
                 ((
                     (!shouldSkipInsert(field, entity) ? (
-                        bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
+                        uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
                     ) : 0)
                 ), ...);
             }, fields);
@@ -83,7 +83,7 @@ public:
                 }
             } else {
                 pstmt->executeUpdate();
-                long long newId = connPtr->lastInsertId();
+                long long newId = conn.lastInsertId();
                 if (newId > 0) writeBackAutoIncrement(fields, entity, newId);
             }
             return true;
@@ -94,13 +94,18 @@ public:
         }
     }
 
+    static bool save(T& entity) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return save(entity, *conn);
+    }
+
     // 兼容临时对象传参：save({0, "name", ...})
     static bool save(T&& entity) { return save(entity); }
 
-    // 更新实体 (UPDATE)：按主键更新其余字段
-    static bool update(const T& entity) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    // ---------------- 更新 (UPDATE)：按主键 ----------------
+    // 与 save 一致：空字符串且有默认值的字段不参与 SET（避免清空数据库管理的列）
+    static bool update(const T& entity, IConnection& conn) {
+        auto dialect = conn.dialect();
 
         std::stringstream ss;
         ss << "UPDATE " << dialect->quoteIdentifier(TableMeta<T>::name) << " SET ";
@@ -110,12 +115,15 @@ public:
 
         std::apply([&](auto&&... field) {
             ((
-                (!isPrimaryKey(field.constraint_sql) ? (
+                (shouldSkipUpdate(field, entity) ? 0 : (
                     ss << (first ? "" : ", ") << dialect->quoteIdentifier(field.column_name) << " = ?",
                     first = false
-                ) : 0)
+                ))
             ), ...);
         }, fields);
+
+        // 全部字段都被跳过时退化为空 UPDATE；直接成功返回
+        if (first) return true;
 
         ss << " WHERE ";
         first = true;
@@ -129,21 +137,21 @@ public:
         }, fields);
 
         try {
-            auto pstmt = connPtr->prepareStatement(ss.str());
+            auto pstmt = conn.prepareStatement(ss.str());
 
             int index = 1;
             std::apply([&](auto&&... field) {
                 ((
-                    (!isPrimaryKey(field.constraint_sql) ? (
-                        bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
-                    ) : 0)
+                    (shouldSkipUpdate(field, entity) ? 0 : (
+                        uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
+                    ))
                 ), ...);
             }, fields);
 
             std::apply([&](auto&&... field) {
                 ((
                     (isPrimaryKey(field.constraint_sql) ? (
-                        bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
+                        uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
                     ) : 0)
                 ), ...);
             }, fields);
@@ -157,10 +165,14 @@ public:
         }
     }
 
-    // 删除实体 (DELETE)：按主键删除
-    static bool remove(const T& entity) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    static bool update(const T& entity) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return update(entity, *conn);
+    }
+
+    // ---------------- 删除 (DELETE)：按主键 ----------------
+    static bool remove(const T& entity, IConnection& conn) {
+        auto dialect = conn.dialect();
 
         std::stringstream ss;
         ss << "DELETE FROM " << dialect->quoteIdentifier(TableMeta<T>::name) << " WHERE ";
@@ -177,13 +189,13 @@ public:
         }, fields);
 
         try {
-            auto pstmt = connPtr->prepareStatement(ss.str());
+            auto pstmt = conn.prepareStatement(ss.str());
 
             int index = 1;
             std::apply([&](auto&&... field) {
                 ((
                     (isPrimaryKey(field.constraint_sql) ? (
-                        bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
+                        uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
                     ) : 0)
                 ), ...);
             }, fields);
@@ -197,10 +209,14 @@ public:
         }
     }
 
-    // 清空表数据 (TRUNCATE)：SQLite 无 TRUNCATE，退化为 DELETE FROM
-    static bool truncate() {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    static bool remove(const T& entity) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return remove(entity, *conn);
+    }
+
+    // ---------------- 清空 (TRUNCATE / DELETE FROM) ----------------
+    static bool truncate(IConnection& conn) {
+        auto dialect = conn.dialect();
         std::string sql;
         if (dialect->kind() == DialectKind::SQLite) {
             sql = "DELETE FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
@@ -208,7 +224,7 @@ public:
             sql = "TRUNCATE TABLE " + dialect->quoteIdentifier(TableMeta<T>::name);
         }
         try {
-            auto stmt = connPtr->createStatement();
+            auto stmt = conn.createStatement();
             stmt->execute(sql);
             return true;
         } catch (const uORM::Exception&) {
@@ -218,20 +234,26 @@ public:
         }
     }
 
-    // 查询所有实体
-    static std::vector<T> findAll() {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
-        std::string sql = "SELECT * FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
-        return executeQuery(connPtr, sql);
+    static bool truncate() {
+        auto conn = ConnectionPool::instance().getConnection();
+        return truncate(*conn);
     }
 
-    // 根据条件查询单个实体 (支持占位符)
-    // 例如: findOne("username = ?", "Alice")
+    // ---------------- 查询 ----------------
+    static std::vector<T> findAll(IConnection& conn) {
+        auto dialect = conn.dialect();
+        std::string sql = "SELECT * FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
+        return queryRows(conn, sql);
+    }
+
+    static std::vector<T> findAll() {
+        auto conn = ConnectionPool::instance().getConnection();
+        return findAll(*conn);
+    }
+
     template<typename... Args>
-    static std::optional<T> findOne(const std::string& whereClause, Args&&... args) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    static std::optional<T> findOne(IConnection& conn, const std::string& whereClause, Args&&... args) {
+        auto dialect = conn.dialect();
 
         std::string sql = "SELECT * FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
         if (!whereClause.empty()) {
@@ -239,28 +261,36 @@ public:
         }
         sql += " LIMIT 1";
 
-        auto list = executeQuery(connPtr, sql, std::forward<Args>(args)...);
+        auto list = queryRows(conn, sql, std::forward<Args>(args)...);
         if (list.empty()) return std::nullopt;
         return list[0];
     }
 
-    // 根据条件查询列表 (支持占位符)
     template<typename... Args>
-    static std::vector<T> find(const std::string& whereClause, Args&&... args) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    static std::optional<T> findOne(const std::string& whereClause, Args&&... args) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return findOne(*conn, whereClause, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static std::vector<T> find(IConnection& conn, const std::string& whereClause, Args&&... args) {
+        auto dialect = conn.dialect();
 
         std::string sql = "SELECT * FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
         if (!whereClause.empty()) {
             sql += " WHERE " + whereClause;
         }
-        return executeQuery(connPtr, sql, std::forward<Args>(args)...);
+        return queryRows(conn, sql, std::forward<Args>(args)...);
     }
 
-    // 使用 Query 构造器查询列表
-    static std::vector<T> select(const Query& query) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    template<typename... Args>
+    static std::vector<T> find(const std::string& whereClause, Args&&... args) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return find(*conn, whereClause, std::forward<Args>(args)...);
+    }
+
+    static std::vector<T> select(IConnection& conn, const Query& query) {
+        auto dialect = conn.dialect();
 
         std::string sql = "SELECT * FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
 
@@ -273,20 +303,27 @@ public:
         sql += query.getLimit();
         sql += query.getOffset();
 
-        return executeQueryWithParams(connPtr, sql, query.getParams());
+        return queryRowsWithParams(conn, sql, query.getParams());
     }
 
-    // 使用 Query 构造器查询单个实体
-    static std::optional<T> selectOne(const Query& query) {
-        auto results = select(query);
+    static std::vector<T> select(const Query& query) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return select(*conn, query);
+    }
+
+    static std::optional<T> selectOne(IConnection& conn, const Query& query) {
+        auto results = select(conn, query);
         if (results.empty()) return std::nullopt;
         return results[0];
     }
 
-    // 统计记录数
-    static long long count(const Query& query = Query()) {
-        auto connPtr = ConnectionPool::instance().getConnection();
-        auto dialect = connPtr->dialect();
+    static std::optional<T> selectOne(const Query& query) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return selectOne(*conn, query);
+    }
+
+    static long long count(IConnection& conn, const Query& query = Query()) {
+        auto dialect = conn.dialect();
 
         std::string sql = "SELECT COUNT(*) AS count_val FROM " + dialect->quoteIdentifier(TableMeta<T>::name);
 
@@ -296,11 +333,11 @@ public:
         }
 
         try {
-            auto pstmt = connPtr->prepareStatement(sql);
+            auto pstmt = conn.prepareStatement(sql);
 
             const auto& params = query.getParams();
             for (size_t i = 0; i < params.size(); ++i) {
-                bindSqlValue(pstmt.get(), i + 1, params[i]);
+                uORM::bindSqlValue(pstmt.get(), static_cast<int>(i + 1), params[i]);
             }
 
             auto res = pstmt->executeQuery();
@@ -315,6 +352,11 @@ public:
         return 0;
     }
 
+    static long long count(const Query& query = Query()) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return count(*conn, query);
+    }
+
 private:
     static bool hasDefaultConstraint(const char* constraints) {
         std::string s(constraints);
@@ -324,6 +366,17 @@ private:
     template<typename Field>
     static bool shouldSkipInsert(const Field& field, const T& entity) {
         if (isAutoIncrement(field.constraint_sql)) return true;
+        return skipsEmptyDefault(field, entity);
+    }
+
+    template<typename Field>
+    static bool shouldSkipUpdate(const Field& field, const T& entity) {
+        if (isPrimaryKey(field.constraint_sql) || isAutoIncrement(field.constraint_sql)) return true;
+        return skipsEmptyDefault(field, entity);
+    }
+
+    template<typename Field>
+    static bool skipsEmptyDefault(const Field& field, const T& entity) {
         using FieldType = typename std::decay_t<Field>::Type;
         if constexpr (std::is_same_v<FieldType, std::string>) {
             const auto& value = entity.*(field.member_ptr);
@@ -332,7 +385,6 @@ private:
         return false;
     }
 
-    // 在字段元数据中查找自增列名
     template<typename Fields>
     static std::string findAutoIncrementColumn(const Fields& fields) {
         std::string col;
@@ -343,7 +395,6 @@ private:
         return col;
     }
 
-    // 将自增主键值写回实体
     template<typename Fields>
     static void writeBackAutoIncrement(const Fields& fields, T& entity, const SqlValue& v) {
         if (isNullValue(v)) return;
@@ -373,15 +424,13 @@ private:
     }
 
     template<typename... Args>
-    static std::vector<T> executeQuery(
-        std::unique_ptr<IConnection, std::function<void(IConnection*)>>& connPtr,
-        const std::string& sql, Args&&... args) {
+    static std::vector<T> queryRows(IConnection& conn, const std::string& sql, Args&&... args) {
         std::vector<T> results;
         try {
-            auto pstmt = connPtr->prepareStatement(sql);
+            auto pstmt = conn.prepareStatement(sql);
 
             int index = 1;
-            (bindValue(pstmt.get(), index++, args), ...);
+            (uORM::bindValue(pstmt.get(), index++, args), ...);
 
             auto res = pstmt->executeQuery();
             while (res->next()) {
@@ -395,15 +444,14 @@ private:
         return results;
     }
 
-    static std::vector<T> executeQueryWithParams(
-        std::unique_ptr<IConnection, std::function<void(IConnection*)>>& connPtr,
-        const std::string& sql, const std::vector<SqlValue>& params) {
+    static std::vector<T> queryRowsWithParams(IConnection& conn, const std::string& sql,
+                                              const std::vector<SqlValue>& params) {
         std::vector<T> results;
         try {
-            auto pstmt = connPtr->prepareStatement(sql);
+            auto pstmt = conn.prepareStatement(sql);
 
             for (size_t i = 0; i < params.size(); ++i) {
-                bindSqlValue(pstmt.get(), i + 1, params[i]);
+                uORM::bindSqlValue(pstmt.get(), static_cast<int>(i + 1), params[i]);
             }
 
             auto res = pstmt->executeQuery();
@@ -428,42 +476,6 @@ private:
     static bool isPrimaryKey(const char* constraints) {
         std::string s(constraints);
         return s.find("PRIMARY KEY") != std::string::npos;
-    }
-
-    // 将 C++ 值绑定到 PreparedStatement（统一入口，类型分流）
-    template<typename V>
-    static void bindValue(IPreparedStatement* pstmt, int index, V&& val) {
-        using D = std::decay_t<V>;
-        if constexpr (std::is_same_v<D, SqlValue>) {
-            bindSqlValue(pstmt, index, val);
-        } else if constexpr (std::is_null_pointer_v<D>) {
-            pstmt->setNull(index);
-        } else if constexpr (std::is_enum_v<D>) {
-            pstmt->setInt64(index, static_cast<long long>(val));
-        } else if constexpr (std::is_integral_v<D>) {
-            pstmt->setInt64(index, static_cast<long long>(val));
-        } else if constexpr (std::is_floating_point_v<D>) {
-            pstmt->setDouble(index, static_cast<double>(val));
-        } else if constexpr (std::is_convertible_v<D, std::string>) {
-            pstmt->setString(index, std::string(val));
-        } else {
-            static_assert(sizeof(D) == 0, "uORM: unsupported parameter type for binding");
-        }
-    }
-
-    static void bindSqlValue(IPreparedStatement* pstmt, int index, const SqlValue& val) {
-        std::visit([&](auto&& arg) {
-            using ArgType = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_null_pointer_v<ArgType>) {
-                pstmt->setNull(index);
-            } else if constexpr (std::is_same_v<ArgType, long long>) {
-                pstmt->setInt64(index, arg);
-            } else if constexpr (std::is_same_v<ArgType, double>) {
-                pstmt->setDouble(index, arg);
-            } else if constexpr (std::is_same_v<ArgType, std::string>) {
-                pstmt->setString(index, arg);
-            }
-        }, val);
     }
 
     // 从结果集获取值并转换为 C++ 类型
