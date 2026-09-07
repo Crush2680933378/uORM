@@ -166,19 +166,10 @@ public:
     }
 
     std::unique_ptr<IResultSet> executeQuery() override {
-        // 返回结果集后由其接管 stmt_ 的 finalize
-        int rc = sqlite3_step(stmt_);
-        if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
-            std::string err = sqlite3_errmsg(db_);
-            sqlite3_finalize(stmt_);
-            stmt_ = nullptr;
-            throw SqlError("SQLite step error: " + err + " [SQL: " + sql_ + "]");
-        }
+        // 不在此处 step：首行必须留给调用方（否则会吞掉第一行结果）。
+        // 结果集接管 stmt_ 的所有权，错误在首次 next() 时抛出。
         auto* rs = new SQLiteResultSet(db_, stmt_, sql_);
-        stmt_ = nullptr; // 所有权已转移
-        if (rc == SQLITE_DONE) {
-            // 空结果集：包装器在 next() 时返回 false
-        }
+        stmt_ = nullptr;
         return std::unique_ptr<IResultSet>(rs);
     }
 
