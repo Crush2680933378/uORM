@@ -138,6 +138,12 @@ public:
 
     unsigned long long executeUpdate() override {
         PGresult* r = execParams();
+        ExecStatusType st = PQresultStatus(r);
+        if (st != PGRES_COMMAND_OK && st != PGRES_TUPLES_OK) {
+            std::string err = lastError_;
+            PQclear(r);
+            throw SqlError("PostgreSQL executeUpdate error: " + err);
+        }
         std::string affected = PQcmdTuples(r);
         PQclear(r);
         return affected.empty() ? 0 : static_cast<unsigned long long>(std::strtoull(affected.c_str(), nullptr, 10));

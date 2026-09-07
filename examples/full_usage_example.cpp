@@ -190,6 +190,61 @@ void demonstrateCRUD() {
     }
 }
 
+// ==========================================
+// 5. 事务与原生查询演示
+// ==========================================
+void demonstrateTransactionAndRawQuery() {
+    std::cout << "\n=== 演示事务与原生查询 ===" << std::endl;
+    auto& ds = uORM::ConnectionPool::instance().source();
+
+    // 场景 1: 事务提交 —— 事务内插入 + 更新
+    {
+        bool ok = false;
+        try {
+            uORM::withTransaction(ds, [&](uORM::IConnection& conn) {
+                Product p{0, "Transaction Item", "Test", 1.0, 1, true, ""};
+                uORM::Mapper<Product>::save(p, conn);           // p.id 自动写回
+                p.price = 2.0;
+                uORM::Mapper<Product>::update(p, conn);
+                ok = true;
+            });
+        } catch (const std::exception& e) {
+            std::cerr << "[事务提交] 异常: " << e.what() << std::endl;
+        }
+        std::cout << "[事务提交] 插入+更新 " << (ok ? "成功" : "失败") << std::endl;
+    }
+
+    // 场景 2: 事务回滚 —— 抛异常后整体回滚
+    {
+        auto before = uORM::Mapper<Product>::count();
+        try {
+            uORM::withTransaction(ds, [&](uORM::IConnection& conn) {
+                Product p{0, "Rollback Item", "Test", 1.0, 1, true, ""};
+                uORM::Mapper<Product>::save(p, conn);
+                throw std::runtime_error("模拟业务失败");
+            });
+        } catch (const std::exception& e) {
+            // 预期异常
+        }
+        auto after = uORM::Mapper<Product>::count();
+        std::cout << "[事务回滚] 记录数 " << before << " -> " << after
+                  << (before == after ? "（回滚成功）" : "（回滚失败!）") << std::endl;
+    }
+
+    // 场景 3: 原生查询（通用结果集，供动态场景/Web 使用）
+    {
+        auto result = ds.query("SELECT name, price FROM products WHERE price > ? ORDER BY price DESC",
+                               {uORM::SqlValue{100.0}});
+        std::cout << "[原生查询] 列: ";
+        for (const auto& c : result.columns) std::cout << c << " ";
+        std::cout << "| 行数: " << result.rowCount() << std::endl;
+        for (const auto& row : result.rows) {
+            std::cout << "  - " << uORM::valueToString(row[0])
+                      << " = " << uORM::valueToDouble(row[1]) << std::endl;
+        }
+    }
+}
+
 int main() {
     // 1. 读取配置
     try {
@@ -217,6 +272,7 @@ int main() {
     // 4. 运行演示
     demonstrateCRUD();
     demonstrateQueryBuilder();
+    demonstrateTransactionAndRawQuery();
 
     return 0;
 }

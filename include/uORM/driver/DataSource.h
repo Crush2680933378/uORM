@@ -9,6 +9,7 @@
 #include "uORM/driver/DBInterfaces.h"
 #include "uORM/driver/DriverRegistry.h"
 #include "uORM/orm/Error.h"
+#include "uORM/orm/QueryResult.h"
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -113,6 +114,18 @@ public:
     auto withConnection(F&& f) -> decltype(std::declval<F>()(std::declval<IConnection&>())) {
         auto conn = getConnection();
         return f(*conn);
+    }
+
+    // 便捷：原生查询（借连接执行后归还）
+    QueryResult query(const std::string& sql, const std::vector<SqlValue>& params = {}) {
+        auto conn = getConnection();
+        return executeQuery(*conn, sql, params);
+    }
+
+    // 便捷：原生 DML/DDL 执行
+    unsigned long long execute(const std::string& sql, const std::vector<SqlValue>& params = {}) {
+        auto conn = getConnection();
+        return executeUpdate(*conn, sql, params);
     }
 
     std::shared_ptr<ISqlDialect> dialect() {

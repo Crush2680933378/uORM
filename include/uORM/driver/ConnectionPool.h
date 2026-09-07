@@ -33,6 +33,9 @@ public:
         return impl().dialect();
     }
 
+    // 访问底层数据源（事务/原生查询/统计）
+    DataSource& source() { return impl(); }
+
     ConnectionPool(const ConnectionPool&) = delete;
     ConnectionPool& operator=(const ConnectionPool&) = delete;
 
