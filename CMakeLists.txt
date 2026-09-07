@@ -117,6 +117,9 @@ if(BUILD_EXAMPLES)
   if(UORM_ENABLE_WEB)
     add_executable(uORM_http_demo examples/http_demo.cpp)
     target_link_libraries(uORM_http_demo PRIVATE uORM::web)
+
+    add_executable(uORM_webconsole examples/webconsole.cpp)
+    target_link_libraries(uORM_webconsole PRIVATE uORM::web)
   endif()
 endif()
 
