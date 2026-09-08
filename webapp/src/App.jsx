@@ -37,8 +37,13 @@ export default function App() {
       conns.forEach(async (c) => {
         try {
           const res = await api.tables(c.id)
-          setTablesMap((m) => ({ ...m, [c.id]: (res.tables || []).map((name) => ({ name })) }))
-        } catch { setTablesMap((m) => ({ ...m, [c.id]: [] })) }
+          setTablesMap((m) => ({ ...m, [c.id]: {
+            tables: (res.tables || []).map((name) => ({ name })),
+            views: (res.views || []).map((name) => ({ name })),
+          } }))
+        } catch {
+          setTablesMap((m) => ({ ...m, [c.id]: { tables: [], views: [] } }))
+        }
       })
       return conns
     } catch (e) {
@@ -49,8 +54,11 @@ export default function App() {
 
   const loadTables = (connId) => {
     api.tables(connId)
-      .then((data) => setTablesMap((m) => ({ ...m, [connId]: (data.tables || []).map((name) => ({ name })) })))
-      .catch(() => setTablesMap((m) => ({ ...m, [connId]: [] })))
+      .then((data) => setTablesMap((m) => ({ ...m, [connId]: {
+        tables: (data.tables || []).map((name) => ({ name })),
+        views: (data.views || []).map((name) => ({ name })),
+      } })))
+      .catch(() => setTablesMap((m) => ({ ...m, [connId]: { tables: [], views: [] } })))
   }
 
   useEffect(() => {
@@ -91,11 +99,12 @@ export default function App() {
     })
   }
 
-  const openTableTab = (connId, table) => {
+  const openTableTab = (connId, table, readOnly = false) => {
     const conn = connections.find((c) => c.id === connId)
+    const prefix = readOnly ? 'vt:' : 't:'
     openTab({
-      key: `t:${connId}:${table}`, type: 'table', connId, table,
-      title: <span><TableOutlined /> {table}</span>,
+      key: `${prefix}${connId}:${table}`, type: 'table', connId, table, readOnly,
+      title: <span><TableOutlined /> {table}{readOnly ? '（视图）' : ''}</span>,
     })
   }
   const openSqlTab = (connId) => {
@@ -117,17 +126,30 @@ export default function App() {
     key: c.id,
     icon: <DatabaseOutlined style={{ color: '#2563eb' }} />,
     title: <span>{c.name} <Tag style={{ marginLeft: 4 }}>{c.driver}</Tag></span>,
-    children: (tablesMap[c.id] || []).map((t) => ({
-      key: `t:${c.id}:${t.name}`,
-      icon: <TableOutlined />,
-      title: t.name,
-      isLeaf: false,
-      children: (columnsMap[`${c.id}:${t.name}`] || []).map((col) => ({
-        key: `c:${c.id}:${t.name}:${col[0]}`,
-        title: <span style={{ fontSize: 12, color: '#64748b' }}>{col[0]} <span style={{ color: '#94a3b8' }}>{String(col[1]).split('(')[0]}</span></span>,
-        selectable: false,
+    children: [
+      ...(tablesMap[c.id]?.tables || []).map((t) => ({
+        key: `t:${c.id}:${t.name}`,
+        icon: <TableOutlined />,
+        title: t.name,
+        isLeaf: false,
+        children: (columnsMap[`${c.id}:${t.name}`] || []).map((col) => ({
+          key: `c:${c.id}:${t.name}:${col[0]}`,
+          title: <span style={{ fontSize: 12, color: '#64748b' }}>{col[0]} <span style={{ color: '#94a3b8' }}>{String(col[1]).split('(')[0]}</span></span>,
+          selectable: false,
+        })),
       })),
-    })),
+      ...((tablesMap[c.id]?.views || []).length ? [{
+        key: `vgrp:${c.id}`,
+        title: <span style={{ color: '#94a3b8' }}>视图</span>,
+        selectable: false,
+        children: (tablesMap[c.id].views).map((v) => ({
+          key: `v:${c.id}:${v.name}`,
+          icon: <TableOutlined />,
+          title: v.name,
+          isLeaf: true,
+        })),
+      }] : []),
+    ],
   }))
 
   const onLoadTreeData = (treeNode) =>
@@ -152,6 +174,10 @@ export default function App() {
       const [, connId, ...rest] = key.split(':')
       setActiveConnId(connId)
       openTableTab(connId, rest.join(':'))
+    } else if (typeof key === 'string' && key.startsWith('v:')) {
+      const [, connId, ...rest] = key.split(':')
+      setActiveConnId(connId)
+      openTableTab(connId, rest.join(':'), true)
     } else {
       setActiveConnId(key)
       loadTables(key)
@@ -209,7 +235,7 @@ export default function App() {
                 label: t.title,
                 closable: true,
                 children:
-                  t.type === 'table' ? <TableGrid connId={t.connId} table={t.table} /> :
+                  t.type === 'table' ? <TableGrid connId={t.connId} table={t.table} readOnly={t.readOnly} /> :
                   t.type === 'sql' ? <SqlConsole connId={t.connId} /> :
                   t.type === 'conn' ? <Connections connections={connections} drivers={drivers} onChange={refreshConnections} /> :
                   <EmptyHint text="在左侧展开表树进行浏览" />,
