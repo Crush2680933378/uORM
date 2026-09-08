@@ -108,6 +108,23 @@ if(UORM_ENABLE_WEB)
     endif()
 endif()
 
+# ---------------- C++ 抽象接口库（Pimpl：实现隐藏在动态库内） ----------------
+option(UORM_BUILD_UORMPP "Build uormpp C++ abstract interface library" ON)
+if(UORM_BUILD_UORMPP)
+    add_library(uormpp SHARED src/uormpp_impl.cpp)
+    add_library(uORM::uormpp ALIAS uormpp)
+    target_compile_definitions(uormpp PRIVATE UORMPP_BUILDING)
+    target_compile_definitions(uormpp PUBLIC UORMPP_SHARED)
+    target_include_directories(uormpp PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_link_libraries(uormpp PRIVATE uORM::uorm)
+    if(UNIX)
+        target_link_libraries(uormpp PRIVATE Threads::Threads)
+    endif()
+endif()
+
 # ---------------- C ABI 动态库 ----------------
 # 整个 C++ 内核编译进 uorm_c 动态库，对外只导出 uorm_c.h 的稳定 C 符号。
 if(UORM_BUILD_C_ABI)
@@ -141,8 +158,13 @@ if(BUILD_EXAMPLES)
   endif()
 
   if(UORM_BUILD_C_ABI)
-    add_executable(uORM_c_demo examples/c_demo.c)
+    add_executable(uORM_c_demo examples/bindings/c_full_demo.c)
     target_link_libraries(uORM_c_demo PRIVATE uorm_c)
+  endif()
+
+  if(UORM_BUILD_UORMPP)
+    add_executable(uORMPP_demo examples/bindings/cpp_full_demo.cpp)
+    target_link_libraries(uORMPP_demo PRIVATE uormpp)
   endif()
 endif()
 
@@ -185,13 +207,22 @@ if(UORM_BUILD_C_ABI)
   )
 endif()
 
+if(UORM_BUILD_UORMPP)
+  install(TARGETS uormpp
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+  )
+  install(DIRECTORY include/uormpp DESTINATION include)
+endif()
+
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY thirdparty/uJSON/include/ DESTINATION include)
 
 # Config files
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/uORMConfigVersion.cmake"
-    VERSION 0.2.0
+    VERSION 0.8.0
     COMPATIBILITY SameMajorVersion
 )
 
