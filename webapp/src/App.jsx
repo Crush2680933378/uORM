@@ -6,8 +6,10 @@ import {
 } from '@ant-design/icons'
 import { api, getToken, clearToken } from './api.js'
 import Connections from './pages/Connections.jsx'
+import Users from './components/Users.jsx'
 import TableGrid from './components/TableGrid.jsx'
 import SqlConsole from './components/SqlConsole.jsx'
+import Logs from './components/Logs.jsx'
 
 const { Sider, Content, Header, Footer } = Layout
 const { Text } = Typography
@@ -62,15 +64,6 @@ export default function App() {
       .catch(() => setTablesMap((m) => ({ ...m, [connId]: { tables: [], views: [] } })))
   }
 
-  useEffect(() => {
-    if (!authed) return
-    api.drivers().then((d) => setDrivers(d.drivers || [])).catch(() => {})
-    api.me().then((m) => setMe({ username: m.username, role: m.role })).catch(() => {})
-    refreshConnections()
-    refreshUsers()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed])
-
   const isSuper = me.role === 'superadmin'
   const isAdmin = me.role === 'admin' || isSuper
   const canWrite = isAdmin  // 普通用户只读
@@ -79,6 +72,15 @@ export default function App() {
     if (!isSuper) return
     api.users().then((d) => setUsersList(d.users || [])).catch(() => {})
   }
+
+  useEffect(() => {
+    if (!authed) return
+    api.drivers().then((d) => setDrivers(d.drivers || [])).catch(() => {})
+    api.me().then((m) => setMe({ username: m.username, role: m.role })).catch(() => {})
+    refreshConnections()
+    refreshUsers()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed])
 
   if (!authed) {
     return (
@@ -233,6 +235,12 @@ export default function App() {
                 用户管理
               </Button>
             )}
+            {isAdmin && (
+              <Button size="small" icon={<TableOutlined />}
+                onClick={() => openTab({ key: 'logs', type: 'logs', title: <span>操作日志</span> })}>
+                操作日志
+              </Button>
+            )}
           </Space>
           <div style={{ flex: 1 }} />
           <Text style={{ color: '#94a3b8', fontSize: 12, marginRight: 12 }}>
@@ -260,6 +268,7 @@ export default function App() {
                   t.type === 'sql' ? <SqlConsole connId={t.connId} canWrite={canWrite} /> :
                   t.type === 'conn' ? <Connections connections={connections} drivers={drivers} onChange={refreshConnections} /> :
                   t.type === 'users' ? <Users users={usersList} onChange={() => { refreshUsers() }} /> :
+                  t.type === 'logs' ? <Logs /> :
                   <EmptyHint text="在左侧展开表树进行浏览" />,
               }))}
             />

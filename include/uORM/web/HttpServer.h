@@ -90,6 +90,12 @@ private:
     }
 
     void handleConnection(asio::ip::tcp::socket socket) {
+        // 客户端 IP（连接级获取一次）
+        std::string peer;
+        try {
+            peer = socket.remote_endpoint().address().to_string();
+        } catch (...) { peer = "unknown"; }
+
         try {
             asio::socket_base::keep_alive option(true);
             socket.set_option(option);
@@ -98,6 +104,7 @@ private:
             char chunk[8192];
             for (;;) {
                 HttpRequest req;
+                req.remote = peer;
                 std::size_t headerEnd;
 
                 // 1. 读到完整头部

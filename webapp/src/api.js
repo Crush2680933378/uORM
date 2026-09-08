@@ -39,6 +39,7 @@ export const api = {
   logout: () => localStorage.removeItem(TOKEN_KEY),
   drivers: () => req('GET', '/api/drivers'),
   users: () => req('GET', '/api/users'),
+  logs: (params) => req('GET', '/api/logs?' + new URLSearchParams(params)),
   addUser: (p) => req('POST', '/api/users', p),
   delUser: (name) => req('DELETE', `/api/users/${encodeURIComponent(name)}`),
   setUserRole: (name, role) => req('PUT', `/api/users/${encodeURIComponent(name)}/role`, { role }),

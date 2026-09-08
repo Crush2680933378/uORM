@@ -16,6 +16,7 @@ struct HttpRequest {
     std::string method;
     std::string path;                      // 不含 query string
     std::string query;                     // 原始 query string
+    std::string remote;                    // 客户端 IP（由 HttpServer 填充）
     std::map<std::string, std::string> headers;
     std::string body;
 

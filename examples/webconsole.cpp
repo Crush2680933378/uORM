@@ -32,6 +32,7 @@
 #include <uORM/web/StaticFiles.h>
 #include <uORM/web/JsonUtil.h>
 #include <uORM/web/UserStore.h>
+#include <uORM/web/AuditLog.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -140,6 +141,7 @@ int main(int argc, char** argv) {
     }
 
     UserStore userStore(usersPath);
+    web::AuditLog audit("operations.log");
     ConnectionManager mgr(storePath);
     web::SessionManager sessions;
 
@@ -162,9 +164,14 @@ int main(int argc, char** argv) {
             auto body = uJSON::Value::parse(req.body);
             std::string username = body.contains("username") ? body.at("username").get<std::string>() : "";
             std::string password = body.contains("password") ? body.at("password").get<std::string>() : "";
-            if (!userStore.verify(username, password))
+            if (!userStore.verify(username, password)) {
+                audit.append({"", username, "-", "login", username,
+                              "denied", "密码错误", req.remote});
                 return HttpResponse::error(401, "用户名或密码错误");
+            }
             std::string token = sessions.create(username, userStore.roleOf(username));
+            audit.append({"", username, userStore.roleOf(username), "login",
+                          username, "ok", "登录成功", req.remote});
             uJSON::Value out = uJSON::Value::object();
             out["token"] = uJSON::Value(token);
             out["username"] = uJSON::Value(username);
@@ -655,17 +662,67 @@ int main(int argc, char** argv) {
         }
     });
 
+    // ---------------- 操作日志（admin+） ----------------
+    api.get("/api/logs", [&](const HttpRequest& req) {
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty() || roleLevel(sess.role) < 2)
+            return HttpResponse::error(403, "需要管理员权限");
+        int limit = 200, offset = 0;
+        try {
+            if (!req.queryParam("limit").empty()) limit = std::atoi(req.queryParam("limit").c_str());
+            if (!req.queryParam("offset").empty()) offset = std::atoi(req.queryParam("offset").c_str());
+        } catch (...) {}
+        if (limit < 1 || limit > 2000) limit = 200;
+        if (offset < 0) offset = 0;
+
+        web::AuditLog::Query q;
+        q.user = req.queryParam("user");
+        q.actionPrefix = req.queryParam("action");
+        q.status = req.queryParam("status");
+        q.limit = static_cast<std::size_t>(limit);
+        q.offset = static_cast<std::size_t>(offset);
+        auto entries = audit.query(q);
+
+        uJSON::Value arr = uJSON::Value::array();
+        for (const auto& e : entries) {
+            auto o = uJSON::Value::object();
+            o["time"] = uJSON::Value(e.time);
+            o["user"] = uJSON::Value(e.user);
+            o["role"] = uJSON::Value(e.role);
+            o["action"] = uJSON::Value(e.action);
+            o["target"] = uJSON::Value(e.target);
+            o["status"] = uJSON::Value(e.status);
+            o["detail"] = uJSON::Value(e.detail);
+            o["ip"] = uJSON::Value(e.ip);
+            arr.push_back(o);
+        }
+        uJSON::Value out = uJSON::Value::object();
+        out["logs"] = arr;
+        out["limit"] = uJSON::Value(limit);
+        out["offset"] = uJSON::Value(offset);
+        return HttpResponse::json(dump(out));
+    });
+
     // ---------------- 组合分发：API 优先，静态兜底（SPA） ----------------
     StaticFiles staticFiles(staticDir);
     auto handle = [&](const HttpRequest& req) -> HttpResponse {
         if (req.path.rfind("/api/", 0) == 0 || req.path == "/api") {
+            auto t0 = std::chrono::steady_clock::now();
+            auto sess = sessions.validate(req.header("X-Auth-Token"));
             // 统一会话鉴权（登录除外）
             if (req.path != "/api/login") {
-                auto sess = sessions.validate(req.header("X-Auth-Token"));
                 if (sess.username.empty())
                     return HttpResponse::error(401, "unauthorized");
             }
-            return api.dispatch(req);
+            HttpResponse resp = api.dispatch(req);
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - t0).count();
+            audit.append({"", sess.username.empty() ? "-" : sess.username,
+                          sess.role, "http " + req.method, req.path,
+                          resp.status < 400 ? "ok" : "denied",
+                          std::to_string(resp.status) + " (" + std::to_string(ms) + "ms)",
+                          req.remote});
+            return resp;
         }
         if (req.method == "GET" || req.method == "HEAD") {
             return staticFiles.serveWithFallback(req.path);
