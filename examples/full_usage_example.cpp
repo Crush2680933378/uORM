@@ -316,6 +316,40 @@ void demonstrateAdvancedQuery() {
     }
 }
 
+// ==========================================
+// 7. Database 门面演示（推荐入口：绑数据源、自动借还连接）
+// ==========================================
+void demonstrateDatabaseFacade() {
+    std::cout << "\n=== 演示 Database 门面 ===" << std::endl;
+    uORM::Database db(uORM::ConnectionPool::instance().source());
+
+    // 批量插入（一条多行 VALUES 语句，自增 id 自动写回）
+    std::vector<Tag> tags;
+    for (const char* n : {"alpha", "beta", "gamma"}) {
+        Tag t{0, n};
+        tags.push_back(t);
+    }
+    if (db.saveRange(tags)) {
+        std::cout << "[门面] 批量插入 " << tags.size() << " 个标签: ";
+        for (const auto& t : tags) std::cout << t.name << "(id=" << t.id << ") ";
+        std::cout << std::endl;
+    }
+
+    // 主键查询
+    auto tag = db.findById<Tag>(tags[0].id);
+    if (tag)
+        std::cout << "[门面] findById(" << tags[0].id << ") -> " << tag->name << std::endl;
+
+    // 事务 + 聚合
+    bool ok = db.tx([&](uORM::IConnection& conn) {
+        tags[1].name = "beta-v2";
+        return uORM::Mapper<Tag>::update(tags[1], conn);
+    });
+    std::cout << "[门面] 事务更新 " << (ok ? "成功" : "失败")
+              << ", 标签总数=" << uORM::valueToInt64(db.aggregate<Tag>("COUNT(*)"))
+              << std::endl;
+}
+
 int main() {
     // 1. 读取配置
     try {
@@ -345,6 +379,7 @@ int main() {
     demonstrateQueryBuilder();
     demonstrateTransactionAndRawQuery();
     demonstrateAdvancedQuery();
+    demonstrateDatabaseFacade();
 
     return 0;
 }

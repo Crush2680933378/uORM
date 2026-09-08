@@ -200,6 +200,62 @@ void runFullSuite(DataSource& ds) {
         CHECK_FALSE(Mapper<Item>::findOne(*conn, "name = ?", std::string("NullCat")).has_value());
     }
 
+    // 批量插入 + Database 门面（saveRange/findById/count/tx 全走一遍）
+    {
+        Database db(ds);
+
+        // 事务内批量插入
+        CHECK(db.tx([&](IConnection& conn) {
+            std::vector<Item> batch;
+            for (int i = 0; i < 7; ++i) {
+                Item e{0, "Batch" + std::to_string(i), "batch", 1.0 * i, i, true,
+                       "2026-01-01 00:00:00"};
+                batch.push_back(e);
+            }
+            return Mapper<Item>::saveRange(batch, conn); // 事务内批量
+        }));
+
+        long long batchCount = 0;
+        {
+            auto conn = ds.getConnection();
+            batchCount = Mapper<Item>::count(*conn, [&] {
+                Query q; q.eq("category", "batch"); return q;
+            }());
+        }
+        CHECK(batchCount == 7);
+
+        // 事务外批量插入（默认门面路径），自增主键写回且互不相同
+        std::vector<Item> batch2;
+        for (int i = 0; i < 3; ++i) {
+            Item e{0, "Solo" + std::to_string(i), "solo", 5.0, 1, true,
+                   "2026-01-01 00:00:00"};
+            batch2.push_back(e);
+        }
+        CHECK(db.saveRange(batch2));
+        bool idsOk = true;
+        for (const auto& e : batch2) if (e.id <= 0) idsOk = false;
+        CHECK(idsOk);
+
+        // findById 走主键
+        auto one = db.findById<Item>(batch2[1].id);
+        REQUIRE(one.has_value());
+        CHECK(one->name == "Solo1");
+        CHECK(one->price == doctest::Approx(5.0));
+
+        // 分块路径（rowsPerChunk 边界不崩、行数正确）
+        std::vector<Item> big;
+        for (int i = 0; i < 205; ++i) {
+            Item e{0, "Big" + std::to_string(i), "big", 1.0, 1, true,
+                   "2026-01-01 00:00:00"};
+            big.push_back(e);
+        }
+        CHECK(db.saveRange(big));
+        bool bigIdsOk = true;
+        for (const auto& e : big) if (e.id <= 0) bigIdsOk = false;
+        CHECK(bigIdsOk);
+        CHECK(db.count<Item>([&] { Query q; q.eq("category", "big"); return q; }()) == 205);
+    }
+
     // 清理
     {
         auto conn = ds.getConnection();

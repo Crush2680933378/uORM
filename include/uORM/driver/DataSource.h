@@ -27,7 +27,10 @@ struct DataSourceConfig {
     std::string name;             // 数据源名称（多数据源管理用，可空）
     int poolSize = 5;             // 池上限
     int acquireTimeoutMs = 3000;  // 获取连接最长等待（毫秒）
-    bool validateOnAcquire = true;// 借出前 ping 校验
+    bool validateOnAcquire = true;// 借出时做健康检查
+    // 空闲感知 ping：连接空闲超过该毫秒才执行 ping 校验（远程库可省一次 RTT）。
+    // 0 = 每次借出都 ping（最保守）。
+    int idlePingMs = 30000;
 };
 
 // 池化连接句柄：析构自动归还
@@ -40,7 +43,7 @@ public:
     ~DataSource() {
         std::lock_guard<std::mutex> lock(mutex_);
         while (!idle_.empty()) {
-            delete idle_.front();
+            delete idle_.front().conn;
             idle_.pop_front();
         }
     }
@@ -50,22 +53,25 @@ public:
 
     // 获取连接；池满等待，超时抛 ConnectionError
     PooledConnection getConnection() {
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::milliseconds(config_.acquireTimeoutMs);
+        const auto now = std::chrono::steady_clock::now();
+        const auto deadline = now + std::chrono::milliseconds(config_.acquireTimeoutMs);
 
         std::unique_lock<std::mutex> lock(mutex_);
         for (;;) {
             if (!idle_.empty()) {
-                IConnection* conn = idle_.back();
+                IdleEntry entry = idle_.back();
                 idle_.pop_back();
                 ++inUse_;
                 lock.unlock();
 
-                if (config_.validateOnAcquire && !conn->ping()) {
+                // 空闲感知校验：刚归还的连接直接复用，省一次 ping 往返
+                const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - entry.returnedAt).count();
+                const bool needPing = config_.validateOnAcquire && idleMs > config_.idlePingMs;
+                if (needPing && !entry.conn->ping()) {
                     lock.lock();
                     --inUse_;
                     --totalCreated_; // 失效连接移出计数，由重建补位
-                    delete conn;
+                    delete entry.conn;
                     lock.unlock();
                     try {
                         IConnection* fresh = createConnection();
@@ -76,7 +82,7 @@ public:
                         throw ConnectionError("DataSource '" + name() + "': connection lost and reconnect failed");
                     }
                 }
-                return wrap(conn);
+                return wrap(entry.conn);
             }
 
             if (totalCreated_ < config_.poolSize) {
@@ -177,14 +183,18 @@ private:
         if (!conn) return;
         std::lock_guard<std::mutex> lock(mutex_);
         --inUse_;
-        idle_.push_back(conn);
+        idle_.push_back(IdleEntry{conn, std::chrono::steady_clock::now()});
         cond_.notify_one();
     }
 
     DataSourceConfig config_;
     mutable std::mutex mutex_;
     std::condition_variable cond_;
-    std::deque<IConnection*> idle_;
+    struct IdleEntry {
+        IConnection* conn;
+        std::chrono::steady_clock::time_point returnedAt;
+    };
+    std::deque<IdleEntry> idle_;
     int inUse_ = 0;
     int totalCreated_ = 0;
     std::shared_ptr<ISqlDialect> dialect_;

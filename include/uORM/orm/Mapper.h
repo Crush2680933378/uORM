@@ -531,6 +531,113 @@ public:
         return saveOrUpdate(entity, *conn);
     }
 
+    // 主键列名（无主键返回空串）——供 findById / 外部工具使用
+    static std::string primaryKeyColumn() {
+        auto fields = TableMeta<T>::get_fields();
+        std::string col;
+        std::apply([&](auto&&... field) {
+            ((  (!col.empty() || !isPrimaryKey(field.constraint_sql) ? 0
+                : (col = field.column_name, 0)) ), ...);
+        }, fields);
+        return col;
+    }
+
+    // 批量插入：分块的单条多行 VALUES 语句，自增主键按序写回每个元素。
+    // 批量走统一列集（除自增主键外全部列），不做逐行"空串+默认值跳过"，
+    // 因此由调用方保证 NOT NULL/默认值字段的值有效。
+    static bool saveRange(std::vector<T>& items, IConnection& conn) {
+        if (items.empty()) return true;
+        auto dialect = conn.dialect();
+        auto fields = TableMeta<T>::get_fields();
+        constexpr std::size_t fieldCount = std::tuple_size<std::decay_t<decltype(fields)>>::value;
+
+        // 非自增列清单
+        std::vector<std::string> cols;
+        cols.reserve(fieldCount);
+        std::apply([&](auto&&... field) {
+            ((  (isAutoIncrement(field.constraint_sql) ? 0
+                : (cols.emplace_back(field.column_name), 0)) ), ...);
+        }, fields);
+        if (cols.empty()) return false; // 全列自增，无从插入
+
+        // 每块行数：受驱动参数上限约束（SQLite 老默认 999，MySQL/PG 65535）
+        std::size_t rowsPerChunk = (dialect->kind() == DialectKind::SQLite) ? 200 : 1000;
+
+        std::string returningCol;
+        if (dialect->supportsReturningId()) returningCol = findAutoIncrementColumn(fields);
+
+        // 预生成 SQL 片段
+        std::string colSql;
+        {
+            std::stringstream ss;
+            ss << "INSERT INTO " << dialect->quoteIdentifier(TableMeta<T>::name) << " (";
+            for (std::size_t i = 0; i < cols.size(); ++i) {
+                if (i) ss << ", ";
+                ss << dialect->quoteIdentifier(cols[i]);
+            }
+            ss << ") VALUES ";
+            colSql = ss.str();
+        }
+        std::string rowPlaceholder = "(";
+        for (std::size_t i = 0; i < cols.size(); ++i) {
+            if (i) rowPlaceholder += ", ";
+            rowPlaceholder += "?";
+        }
+        rowPlaceholder += ")";
+
+        for (std::size_t start = 0; start < items.size(); start += rowsPerChunk) {
+            const std::size_t end = std::min(items.size(), start + rowsPerChunk);
+            const std::size_t n = end - start;
+
+            std::string sql = colSql;
+            for (std::size_t r = 0; r < n; ++r) {
+                if (r) sql += ", ";
+                sql += rowPlaceholder;
+            }
+            if (!returningCol.empty()) {
+                sql += " RETURNING " + dialect->quoteIdentifier(returningCol);
+            }
+
+            try {
+                auto pstmt = conn.prepareStatement(sql);
+                int index = 1;
+                for (std::size_t i = start; i < end; ++i) {
+                    const T& item = items[i];
+                    std::apply([&](auto&&... field) {
+                        ((  (isAutoIncrement(field.constraint_sql) ? 0 : (
+                                uORM::bindValue(pstmt.get(), index++, item.*(field.member_ptr)), 0
+                            )) ), ...);
+                    }, fields);
+                }
+
+                if (!returningCol.empty()) {
+                    auto res = pstmt->executeQuery();
+                    std::size_t rowIdx = 0;
+                    while (res->next() && (start + rowIdx) < end) {
+                        writeBackAutoIncrement(fields, items[start + rowIdx], res->getSqlValue(0));
+                        ++rowIdx;
+                    }
+                } else {
+                    pstmt->executeUpdate();
+                    // MySQL: LAST_INSERT_ID = 本批次第一行；SQLite: 最后一行
+                    long long base = conn.lastInsertId();
+                    if (base > 0) {
+                        long long firstId = base;
+                        if (dialect->kind() == DialectKind::SQLite) firstId = base - static_cast<long long>(n) + 1;
+                        for (std::size_t i = 0; i < n; ++i) {
+                            writeBackAutoIncrement(fields, items[start + i], firstId + static_cast<long long>(i));
+                        }
+                    }
+                }
+            } catch (const uORM::Exception&) {
+                throw;
+            } catch (const std::exception& e) {
+                throw SqlError(std::string("批量插入失败: ") + e.what());
+            }
+        }
+        return true;
+    }
+
 private:
     // 构建 SELECT 语句（投影/去重/连接/分组/聚合全量支持）
     static std::string buildSelectSql(const std::shared_ptr<ISqlDialect>& dialect, const Query& query) {

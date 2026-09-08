@@ -11,4 +11,5 @@
 #include "uORM/orm/Transaction.h"
 #include "uORM/orm/Schema.h"
 #include "uORM/orm/Mapper.h"
+#include "uORM/orm/Database.h"
 #include "uORM/orm/Error.h"
