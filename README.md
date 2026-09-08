@@ -9,7 +9,10 @@ uORM 是一个现代化的、轻量级的 C++17 ORM 与 **Web 数据库管理台
 - **编译期映射**：`UORM_REFLECTION(User, id, name, age)` 一行注册；也支持完整列定义的 `UORM_TABLE_*` 宏。
 - **方言感知 DDL**：同一份实体定义在三库上建表（`AUTO_INCREMENT` / `GENERATED ... IDENTITY` / `AUTOINCREMENT`、`DATETIME`→`TIMESTAMP` 等自动转换）。
 - **安全查询**：统一 `?` 占位符 + 预编译参数绑定（PG 自动转 `$n`），杜绝 SQL 注入。
-- **事务**：`IConnection::begin/commit/rollback` + RAII `Transaction` + `withTransaction(ds, lambda)`（异常自动回滚）。
+- **类型安全查询**：`db.query<User>().where(&User::age, uORM::GT, 18).orderByDesc(&User::id).all()`——成员指针当列名，写错字段编译不过；同一组条件可直接 `.set(...).update()` / `.remove()`（无 WHERE 拒绝执行，防全表误操作）。
+- **RAII 事务作用域**：`auto tx = db.txBegin(); ...; tx->commit();`——忘提交/抛异常析构自动回滚，连接自动归还；也支持 `db.tx(lambda)`。
+- **批量插入**：`db.saveRange(items)` 单条多行 VALUES、按驱动参数上限分块、自增 id 三库各自正确写回。
+- **事务**：`IConnection::begin/commit/rollback` + RAII `Transaction`/`TxScope` + `withTransaction(ds, lambda)`（异常自动回滚）。
 - **连接池**：`DataSource` 多数据源、有界池、获取超时、空闲感知 ping（空闲 <30s 的连接直接复用，省一次往返）、失效自动重建。
 - **CRUD 全覆盖**：`save`（自增主键自动写回）/ `update` / `remove` / `findOne` / `select` / `count` / `sum` / `avg` / `max` / `min` / `saveOrUpdate`（upsert）/ `selectDynamic`（join/聚合投影）。
 
@@ -125,7 +128,34 @@ try {
 
 仍兼容旧写法：`uORM::ConfigManager` 读 config.json + `uORM::ConnectionPool::instance()` 全局池 + 静态 `uORM::Mapper<T>::xxx`（含 config.json 加载）；所有 Mapper 操作也有 `IConnection&` 重载供事务内使用。
 
-### 4. 多数据源（运行时选择驱动）
+### 4. 类型安全查询与 RAII 事务（推荐）
+
+```cpp
+uORM::Database db(ds);
+
+// 条件/排序/分页全部用成员指针指定列——写错字段编译期就报错
+auto adults = db.query<User>()
+                  .where(&User::age, uORM::GT, 18)
+                  .like(&User::name, "%T%")
+                  .orderByDesc(&User::id)
+                  .limit(10)
+                  .all();
+auto tom = db.query<User>().where(&User::name, uORM::Op::EQ, std::string("Trae")).first();
+
+// 一组条件直接驱动 UPDATE / DELETE（无 WHERE 拒绝执行）
+db.query<User>().where(&User::id, uORM::Op::EQ, user.id)
+    .set(&User::age, 26).update();
+
+// RAII 事务作用域：commit() 提交；忘提交/异常 -> 析构自动回滚，连接自动归还
+{
+    auto tx = db.txBegin();
+    uORM::Mapper<User>::save(user, *tx);
+    uORM::Mapper<User>::update(user, *tx);
+    tx->commit();
+}
+```
+
+### 5. 多数据源（运行时选择驱动）
 
 ```cpp
 uORM::DataSourceConfig cfg;

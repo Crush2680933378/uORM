@@ -26,6 +26,11 @@ struct Item {
 };
 UORM_REFLECTION(Item, id, name, category, price, stock, active, created_at)
 
+// 未注册的类：验证 TypedQuery 拒绝外来成员指针
+struct NotMapped {
+    std::string name;
+};
+
 namespace {
 
 DataSourceConfig makeConfig(const std::string& driver, const std::string& database,
@@ -254,6 +259,74 @@ void runFullSuite(DataSource& ds) {
         for (const auto& e : big) if (e.id <= 0) bigIdsOk = false;
         CHECK(bigIdsOk);
         CHECK(db.count<Item>([&] { Query q; q.eq("category", "big"); return q; }()) == 205);
+    }
+
+    // 类型安全查询（成员指针列）+ RAII 事务作用域
+    {
+        Database db(ds);
+
+        // where + orderBy + limit
+        auto rows = db.query<Item>()
+                        .where(&Item::category, Op::EQ, std::string("batch"))
+                        .orderByAsc(&Item::id)
+                        .limit(3)
+                        .all();
+        REQUIRE(rows.size() == 3);
+        CHECK(rows[0].name == "Batch0");
+        CHECK(rows[1].name == "Batch1");
+
+        // 嵌套括号 + OR
+        auto mixed = db.query<Item>()
+                         .where(&Item::category, Op::EQ, std::string("solo"))
+                         .beginGroup()
+                            .where(&Item::name, Op::EQ, std::string("Solo0"))
+                            .orWhere(&Item::name, Op::EQ, std::string("Solo1"))
+                         .endGroup()
+                         .all();
+        CHECK(mixed.size() == 2);
+
+        // in（按名称列，上一节的 Solo2 已被删除）
+        auto inRows = db.query<Item>()
+                          .in(&Item::name, std::vector<std::string>{"Solo0", "Solo1"})
+                          .all();
+        CHECK(inRows.size() == 2);
+
+        // set + update
+        CHECK(db.query<Item>()
+                   .where(&Item::name, Op::EQ, std::string("Solo0"))
+                   .set(&Item::price, 7.7)
+                   .update());
+        auto s0 = db.query<Item>().where(&Item::name, Op::EQ, std::string("Solo0")).first();
+        REQUIRE(s0.has_value());
+        CHECK(s0->price == doctest::Approx(7.7));
+
+        // remove
+        CHECK(db.query<Item>().where(&Item::name, Op::EQ, std::string("Solo2")).remove());
+        CHECK_FALSE(db.query<Item>().where(&Item::name, Op::EQ, std::string("Solo2")).first().has_value());
+
+        // RAII 事务作用域：提交
+        {
+            auto tx = db.txBegin();
+            Item e{0, "TxScope", "tx", 1.0, 1, true, "2026-01-01 00:00:00"};
+            CHECK(Mapper<Item>::save(e, *tx));
+            tx->commit();
+        }
+        CHECK(db.query<Item>().where(&Item::name, Op::EQ, std::string("TxScope")).first().has_value());
+
+        // RAII 事务作用域：未提交析构自动回滚
+        {
+            auto tx = db.txBegin();
+            Item e{0, "TxGhost", "tx", 1.0, 1, true, "2026-01-01 00:00:00"};
+            CHECK(Mapper<Item>::save(e, *tx));
+            // 无 commit
+        }
+        CHECK_FALSE(db.query<Item>().where(&Item::name, Op::EQ, std::string("TxGhost")).first().has_value());
+
+        // 防全表误操作；外来成员指针被拒绝
+        CHECK_THROWS_AS(db.query<Item>().update(), OrmError);
+        CHECK_THROWS_AS(db.query<Item>().remove(), OrmError);
+        CHECK_THROWS_AS(db.query<Item>().where(&NotMapped::name, Op::EQ, std::string("x")).all(),
+                        OrmError);
     }
 
     // 清理

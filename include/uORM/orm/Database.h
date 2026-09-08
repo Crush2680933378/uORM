@@ -20,6 +20,7 @@
 #include "uORM/orm/Mapper.h"
 #include "uORM/orm/Schema.h"
 #include "uORM/orm/Transaction.h"
+#include "uORM/orm/TypedQuery.h"
 #include "uORM/orm/QueryResult.h"
 
 #include <optional>
@@ -108,7 +109,24 @@ public:
         return ds_.execute(sql, params);
     }
 
-    // ---------------- 事务 ----------------
+    // ---------------- 类型安全查询（推荐） ----------------
+    // 成员指针指定列，编译期防拼错：
+    //   auto rows = db.query<User>()
+    //       .where(&User::age, uORM::GT, 18)
+    //       .orderByDesc(&User::id).limit(10).all();
+    template<typename T>
+    TypedQuery<T> query() { return TypedQuery<T>(ds_); }
+
+    // ---------------- RAII 事务作用域 ----------------
+    // 借出连接 + BEGIN；commit() 显式提交，析构未提交自动回滚，连接自动归还。
+    //   {
+    //       auto tx = db.txBegin();
+    //       Mapper<User>::save(u, *tx);
+    //       tx->commit();
+    //   }
+    TxScope txBegin() { return TxScope(ds_); }
+
+    // ---------------- 事务（lambda 风格） ----------------
     template<typename F>
     auto tx(F&& fn) { return withTransaction(ds_, std::forward<F>(fn)); }
 
