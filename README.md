@@ -217,6 +217,28 @@ cd webapp && npm install && npm run build
 | POST | `/api/connections/{id}/query` | `{sql, params?, maxRows?}` 查询 |
 | POST | `/api/connections/{id}/execute` | `{sql, params?}` DML/DDL |
 
+## 🧩 C++ 抽象接口（Pimpl，实现完全隐藏）
+
+`uormpp` 动态库把整个实现（ORM 内核 + 全部驱动）编译进库内，对外只暴露**纯虚抽象基类**：
+`uormpp::IDatabase` / `IResult` / `ITransaction`，通过工厂 `openDatabase()` 获取。
+使用方只依赖一个头文件 `include/uormpp/UormPP.h`，不接触任何 uORM 内部头文件与实现细节。
+
+```cpp
+#include <uormpp/UormPP.h>
+
+uormpp::Options opts;
+opts.driver = "postgresql";          // 运行时切换驱动
+opts.database = "shop";
+auto db = uormpp::openDatabase(opts);   // 返回 std::unique_ptr<IDatabase>
+
+db->execute("INSERT INTO users (name) VALUES (?)", {uormpp::Param("Tom")});
+auto rs = db->query("SELECT id, name FROM users");
+auto tx = db->beginTransaction();       // RAII：未提交析构自动回滚
+tx->commit();
+```
+
+在 CMake 中：`target_link_libraries(app PRIVATE uORM::uormpp)`。
+
 ## 🌐 C ABI 接口（跨语言绑定）
 
 uORM 的整个 C++ 内核编译进一个动态库 `uorm_c`（`uorm_c.dll` / `libuorm_c.so`），对外只暴露 `include/uORM/abi/uorm_c.h` 中的 **纯 C 稳定符号**——任何能调 C 的语言（C/C++/Python/Rust/Go/C#/Java/JNI…）都可以直接使用，不受 C++ 编译器与 STL 版本差异影响。
