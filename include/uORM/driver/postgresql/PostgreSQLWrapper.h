@@ -191,6 +191,7 @@ private:
     }
 
     PGresult* execParams() {
+        lastError_.clear();
         std::size_t n = params_.size();
         std::vector<const char*> values(n, nullptr);
         for (std::size_t i = 0; i < n; ++i) {
@@ -201,9 +202,11 @@ private:
                                    values.data(), nullptr, nullptr, 0 /*文本格式*/);
         if (!r) throw SqlError(std::string("PostgreSQL error: ") + PQerrorMessage(conn_));
         if (PQresultStatus(r) != PGRES_COMMAND_OK && PQresultStatus(r) != PGRES_TUPLES_OK) {
-            lastError_ = PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY)
-                             ? PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY)
-                             : PQerrorMessage(conn_);
+            const char* primary = PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY);
+            const char* detail = PQresultErrorField(r, PG_DIAG_MESSAGE_DETAIL);
+            lastError_ = primary ? primary : PQerrorMessage(conn_);
+            if (detail && *detail) lastError_ += std::string(" (") + detail + ")";
+            lastError_ += std::string(" [") + PQresStatus(PQresultStatus(r)) + "]";
         }
         return r;
     }

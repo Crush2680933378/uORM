@@ -41,6 +41,35 @@ public:
     template<typename T>
     bool dropTable() { return withConn([&](IConnection& c) { return Schema::dropTable<T>(c); }); }
 
+    // 轻量迁移：缺表建表 / 缺列补列 / 补建索引
+    template<typename T>
+    bool syncTable() { return withConn([&](IConnection& c) { return Schema::syncTable<T>(c); }); }
+
+    bool tableExists(const std::string& table) { return withConn([&](IConnection& c) { return Schema::tableExists(c, table); }); }
+    bool indexExists(const std::string& table, const std::string& indexName) {
+        return withConn([&](IConnection& c) { return Schema::indexExists(c, table, indexName); });
+    }
+    bool createIndex(const std::string& table, const std::string& indexName,
+                     const std::vector<std::string>& columns, bool unique = false) {
+        return withConn([&](IConnection& c) { return Schema::createIndex(c, table, indexName, columns, unique); });
+    }
+    bool dropIndex(const std::string& table, const std::string& indexName) {
+        return withConn([&](IConnection& c) { return Schema::dropIndex(c, table, indexName); });
+    }
+    bool addColumn(const std::string& table, const std::string& column,
+                   const std::string& type, const std::string& constraints = "") {
+        return withConn([&](IConnection& c) { return Schema::addColumn(c, table, column, type, constraints); });
+    }
+    bool dropColumn(const std::string& table, const std::string& column) {
+        return withConn([&](IConnection& c) { return Schema::dropColumn(c, table, column); });
+    }
+    bool renameColumn(const std::string& table, const std::string& oldName, const std::string& newName) {
+        return withConn([&](IConnection& c) { return Schema::renameColumn(c, table, oldName, newName); });
+    }
+    bool renameTable(const std::string& oldName, const std::string& newName) {
+        return withConn([&](IConnection& c) { return Schema::renameTable(c, oldName, newName); });
+    }
+
     // ---------------- 单行 CRUD ----------------
     template<typename T>
     bool save(T& entity) { return withConn([&](IConnection& c) { return Mapper<T>::save(entity, c); }); }

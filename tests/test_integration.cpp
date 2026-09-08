@@ -8,28 +8,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "Entities.hpp"
 #include "uORM/orm/ORM.h"
 #include <cstdlib>
 #include <iostream>
 
 using namespace uORM;
-
-// 注意：实体类型必须在全局命名空间（UORM_* 宏会在 uORM 命名空间内特化 TableMeta）
-struct Item {
-    long long id;
-    std::string name;
-    std::string category;
-    double price;
-    int stock;
-    bool active;
-    std::string created_at;
-};
-UORM_REFLECTION(Item, id, name, category, price, stock, active, created_at)
-
-// 未注册的类：验证 TypedQuery 拒绝外来成员指针
-struct NotMapped {
-    std::string name;
-};
 
 namespace {
 
@@ -336,12 +320,145 @@ void runFullSuite(DataSource& ds) {
     }
 }
 
+    // =====================================================================
+    // Schema 特性：索引 / 复合主键 / 外键 / 轻量迁移
+    // =====================================================================
+    void runSchemaSuite(DataSource& ds) {
+        Database db(ds);
+
+        // 清理遗留表（可复跑）
+        for (const char* t : {"child_rows", "parent_rows", "composite_rows", "indexed_rows", "sync_rows"}) {
+            db.execute("DROP TABLE IF EXISTS " + db.source().dialect()->quoteIdentifier(t));
+        }
+
+        // 声明式索引：建表自动创建；幂等复跑
+        CHECK(db.createTable<IndexedRow>());
+        CHECK(db.indexExists("indexed_rows", "idx_indexed_rows_city"));
+        CHECK(db.indexExists("indexed_rows", "uq_indexed_rows_email"));
+        CHECK(db.indexExists("indexed_rows", "idx_indexed_rows_city_score"));
+        CHECK_FALSE(db.indexExists("indexed_rows", "no_such_idx"));
+        CHECK(db.createTable<IndexedRow>()); // 幂等
+        CHECK(db.indexExists("indexed_rows", "uq_indexed_rows_email"));
+
+        // 唯一索引约束生效：重复 email 抛 SqlError
+        IndexedRow r1{0, "a@x.com", "hz", 1};
+        CHECK(db.save(r1));
+        bool dupThrew = false;
+        try {
+            IndexedRow r2{0, "a@x.com", "sh", 2};
+            db.save(r2);
+        } catch (const SqlError&) {
+            dupThrew = true;
+        }
+        CHECK(dupThrew);
+
+        // 复合索引不强制唯一：city+score 相同但 email 不同应成功
+        IndexedRow r3{0, "b@x.com", "hz", 1};
+        CHECK(db.save(r3));
+
+        // createIndex/dropIndex API
+        CHECK(db.createIndex("indexed_rows", "idx_indexed_rows_score", {"score"}));
+        CHECK(db.indexExists("indexed_rows", "idx_indexed_rows_score"));
+        CHECK(db.dropIndex("indexed_rows", "idx_indexed_rows_score"));
+        CHECK_FALSE(db.indexExists("indexed_rows", "idx_indexed_rows_score"));
+
+        // 复合主键：两列组合唯一
+        CHECK(db.createTable<CompositeRow>());
+        CompositeRow c1{"A", 1, "first"};
+        CompositeRow c2{"A", 2, "second"};
+        CHECK(db.save(c1));
+        CHECK(db.save(c2));
+        CHECK(db.query<CompositeRow>().where(&CompositeRow::code, Op::EQ, std::string("A")).count() == 2);
+
+        bool compThrew = false;
+        try {
+            CompositeRow dup{"A", 1, "dup"};
+            db.save(dup); // (A,1) 已存在 -> 主键冲突
+        } catch (const SqlError&) {
+            compThrew = true;
+        }
+        CHECK(compThrew);
+
+        // 复合主键 update（WHERE code AND seq）
+        CHECK(db.query<CompositeRow>()
+                  .where(&CompositeRow::code, Op::EQ, std::string("A"))
+                  .where(&CompositeRow::seq, Op::EQ, 1)
+                  .set(&CompositeRow::data, std::string("updated"))
+                  .update());
+        auto back = db.query<CompositeRow>()
+                        .where(&CompositeRow::code, Op::EQ, std::string("A"))
+                        .where(&CompositeRow::seq, Op::EQ, 1)
+                        .first();
+        REQUIRE(back.has_value());
+        CHECK(back->data == "updated");
+
+        // saveOrUpdate 走复合主键冲突目标
+        CompositeRow c1v2{"A", 1, "v2"};
+        CHECK(db.saveOrUpdate(c1v2));
+        CHECK(db.query<CompositeRow>().count() == 2);
+
+        // 外键：合法插入成功，孤儿插入抛 SqlError
+        CHECK(db.createTable<ParentRow>());
+        ParentRow p{0, "parent"};
+        CHECK(db.save(p));
+        CHECK(db.createTable<ChildRow>());
+
+        ChildRow okRow{0, p.id, "valid"};
+        CHECK(db.save(okRow));
+
+        ChildRow orphan{0, p.id + 99999, "orphan"};
+        bool fkThrew = false;
+        try {
+            db.save(orphan);
+        } catch (const SqlError&) {
+            fkThrew = true;
+        }
+        CHECK(fkThrew);
+        CHECK(db.query<ChildRow>().count() == 1);
+
+        // 轻量迁移：Base 建表 -> syncTable 补列 -> Full 实体可用且旧数据保留
+        CHECK(db.createTable<SyncRowBase>());
+        SyncRowBase legacy{0, "legacy"};
+        CHECK(db.save(legacy));
+
+        CHECK(db.syncTable<SyncRowFull>()); // 补 score/active 列
+        SyncRowFull fresh{0, "fresh", 42, true};
+        CHECK(db.save(fresh));
+
+        auto legacyBack = db.query<SyncRowFull>().where(&SyncRowFull::name, Op::EQ, std::string("legacy")).first();
+        REQUIRE(legacyBack.has_value()); // 旧数据未丢
+
+        // 改表：renameTable / dropColumn / renameColumn / addColumn
+        //（改名期间 Base/Full 实体映射的旧表名不存在，改完再恢复）
+        CHECK(db.renameTable("sync_rows", "sync_rows_v2"));
+        CHECK(db.tableExists("sync_rows_v2"));
+        CHECK_FALSE(db.tableExists("sync_rows"));
+
+        CHECK(db.dropColumn("sync_rows_v2", "active"));
+        CHECK(db.renameColumn("sync_rows_v2", "score", "points"));
+        CHECK(db.addColumn("sync_rows_v2", "score", "INTEGER", "DEFAULT 0"));
+
+        CHECK(db.renameTable("sync_rows_v2", "sync_rows"));
+        CHECK(db.syncTable<SyncRowFull>()); // 补回被删除的 active 列
+        auto afterAlter = db.query<SyncRowFull>().where(&SyncRowFull::name, Op::EQ, std::string("fresh")).first();
+        REQUIRE(afterAlter.has_value()); // 改名往返 + 补列后数据完好
+        // 补列对已有行取默认值：score = 0；原 42 分随改名存于 points 列
+        CHECK(afterAlter->score == 0);
+        CHECK(valueToInt64(db.query("SELECT points FROM sync_rows WHERE name = 'fresh'").rows[0][0]) == 42);
+
+        // 清理
+        for (const char* t : {"child_rows", "parent_rows", "composite_rows", "indexed_rows", "sync_rows"}) {
+            db.execute("DROP TABLE IF EXISTS " + db.source().dialect()->quoteIdentifier(t));
+        }
+    }
+
 } // namespace
 
 TEST_CASE("SQLite 全流程") {
     auto cfg = makeConfig("sqlite", "uorm_itest.db", "", 0, "", "");
     DataSource ds(cfg);
     runFullSuite(ds);
+    runSchemaSuite(ds);
 }
 
 TEST_CASE("MySQL 全流程（需环境变量）") {
@@ -353,8 +470,10 @@ TEST_CASE("MySQL 全流程（需环境变量）") {
     auto cfg = makeConfig("mysql", envOr("UORM_TEST_MYSQL_DB", "uorm_db"),
                           host, std::atoi(envOr("UORM_TEST_MYSQL_PORT", "3306").c_str()),
                           envOr("UORM_TEST_MYSQL_USER"), envOr("UORM_TEST_MYSQL_PASS"));
+    cfg.acquireTimeoutMs = 15000; // 远程链路排队更久
     DataSource ds(cfg);
     runFullSuite(ds);
+    runSchemaSuite(ds);
 }
 
 TEST_CASE("PostgreSQL 全流程（需环境变量）") {
@@ -366,6 +485,8 @@ TEST_CASE("PostgreSQL 全流程（需环境变量）") {
     auto cfg = makeConfig("postgresql", envOr("UORM_TEST_PG_DB", "uorm_db"),
                           host, std::atoi(envOr("UORM_TEST_PG_PORT", "5432").c_str()),
                           envOr("UORM_TEST_PG_USER"), envOr("UORM_TEST_PG_PASS"));
+    cfg.acquireTimeoutMs = 15000; // 远程链路排队更久
     DataSource ds(cfg);
     runFullSuite(ds);
+    runSchemaSuite(ds);
 }
