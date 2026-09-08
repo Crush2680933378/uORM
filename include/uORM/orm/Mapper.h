@@ -77,9 +77,10 @@ public:
                 ), ...);
             }, fields);
 
-            if (dialect->supportsReturningId()) {
+            if (!returningColumn.empty()) {
+                // 拼了 RETURNING：读回主键写回实体
                 auto res = pstmt->executeQuery();
-                if (res->next() && !returningColumn.empty()) {
+                if (res->next()) {
                     writeBackAutoIncrement(fields, entity, res->getSqlValue(0));
                 }
             } else {
@@ -130,7 +131,7 @@ public:
         first = true;
         std::apply([&](auto&&... field) {
             ((
-                (isPrimaryKey(field.constraint_sql) ? (
+                (isPkField(field) ? (
                     ss << (first ? "" : " AND ") << dialect->quoteIdentifier(field.column_name) << " = ?",
                     first = false
                 ) : 0)
@@ -151,7 +152,7 @@ public:
 
             std::apply([&](auto&&... field) {
                 ((
-                    (isPrimaryKey(field.constraint_sql) ? (
+                    (isPkField(field) ? (
                         uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
                     ) : 0)
                 ), ...);
@@ -182,7 +183,7 @@ public:
         auto fields = TableMeta<T>::get_fields();
         std::apply([&](auto&&... field) {
             ((
-                (isPrimaryKey(field.constraint_sql) ? (
+                (isPkField(field) ? (
                     ss << (first ? "" : " AND ") << dialect->quoteIdentifier(field.column_name) << " = ?",
                     first = false
                 ) : 0)
@@ -195,7 +196,7 @@ public:
             int index = 1;
             std::apply([&](auto&&... field) {
                 ((
-                    (isPrimaryKey(field.constraint_sql) ? (
+                    (isPkField(field) ? (
                         uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
                     ) : 0)
                 ), ...);
@@ -448,21 +449,22 @@ public:
         auto dialect = conn.dialect();
         auto fields = TableMeta<T>::get_fields();
 
-        std::string pkCol;
-        bool pkIsDefault = true;
+        // 收集全部主键列（含复合主键）
+        std::vector<std::string> pkCols;
+        bool pkAllSet = true;
         std::apply([&](auto&&... field) {
-            ((  (isPrimaryKey(field.constraint_sql) ? (
-                    pkCol = field.column_name,
-                    pkIsDefault = primaryKeyHasDefault(entity.*(field.member_ptr))
-                ) : 0) ), ...);
+            ((  (isPkField(field) ? (
+                    pkCols.emplace_back(field.column_name),
+                    pkAllSet = pkAllSet && !primaryKeyHasDefault(entity.*(field.member_ptr)), 0)
+                : 0) ), ...);
         }, fields);
 
         // 无主键或自增主键仍为默认值：普通 insert
-        if (pkCol.empty() || pkIsDefault) return save(entity, conn);
+        if (pkCols.empty() || !pkAllSet) return save(entity, conn);
 
         // upsert 路径：主键列必须参与 INSERT（否则 ON CONFLICT 永远不命中）
         auto includeInUpsert = [&entity](auto&& field) {
-            if (std::string(field.constraint_sql).find("PRIMARY KEY") != std::string::npos) return true;
+            if (isPkField(field)) return true;
             if (std::string(field.constraint_sql).find("AUTO_INCREMENT") != std::string::npos) return false;
             using FieldType = typename std::decay_t<decltype(field)>::Type;
             if constexpr (std::is_same_v<FieldType, std::string>) {
@@ -496,11 +498,16 @@ public:
         if (dialect->kind() == DialectKind::MySQL) {
             ss << " ON DUPLICATE KEY UPDATE ";
         } else {
-            ss << " ON CONFLICT (" << dialect->quoteIdentifier(pkCol) << ") DO UPDATE SET ";
+            ss << " ON CONFLICT (";
+            for (std::size_t i = 0; i < pkCols.size(); ++i) {
+                if (i) ss << ", ";
+                ss << dialect->quoteIdentifier(pkCols[i]);
+            }
+            ss << ") DO UPDATE SET ";
         }
         first = true;
         std::apply([&](auto&&... field) {
-            ((  (includeInUpsert(field) && !isPrimaryKey(field.constraint_sql) ? (
+            ((  (includeInUpsert(field) && !isPkField(field) ? (
                     ss << (first ? "" : ", "),
                     ss << (dialect->kind() == DialectKind::MySQL
                         ? dialect->quoteIdentifier(field.column_name) + "=VALUES(" + dialect->quoteIdentifier(field.column_name) + ")"
@@ -819,6 +826,18 @@ private:
     static bool isPrimaryKey(const char* constraints) {
         std::string s(constraints);
         return s.find("PRIMARY KEY") != std::string::npos;
+    }
+
+    // 主键判定：字段级 PRIMARY KEY，或命中 UORM_COMPOSITE_PK 声明的列
+    template<typename Field>
+    static bool isPkField(const Field& field) {
+        if (isPrimaryKey(field.constraint_sql)) return true;
+        if constexpr (CompositePK<T>::enabled) {
+            for (const auto& c : CompositePK<T>::columns()) {
+                if (std::string(c) == field.column_name) return true;
+            }
+        }
+        return false;
     }
 
     // 从结果集获取值并转换为 C++ 类型

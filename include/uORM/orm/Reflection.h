@@ -93,6 +93,34 @@ struct Constraints {
     static constexpr const char* Unique = "UNIQUE"; // 唯一约束
 };
 
+// ---------------------------------------------------------------------------
+// 索引元数据（声明式索引）
+// 用法（配合 UORM_TABLE_END_WITH_INDEXES）：
+//   UORM_TABLE_END_WITH_INDEXES("",
+//       UORM_INDEX_DEF("idx_city", false, "city"),
+//       UORM_INDEX_DEF("uq_email", true, "email"),             // 唯一索引
+//       UORM_INDEX_DEF("idx_city_score", false, "city", "score")) // 复合索引
+// ---------------------------------------------------------------------------
+struct IndexMeta {
+    const char* name;
+    bool unique;
+    const char* columns[8];      // 最多 8 列的复合索引
+    unsigned char columnCount;
+};
+
+namespace detail {
+constexpr std::size_t indexCount() { return 0; }
+template<typename... Rest>
+constexpr std::size_t indexCount(const char*, Rest&&...) { return 1 + indexCount(); }
+} // namespace detail
+
+// 复合主键（可选声明）：
+//   UORM_COMPOSITE_PK(CompositeRow, code, seq)
+template<typename T>
+struct CompositePK {
+    static constexpr bool enabled = false;
+};
+
 // 字段元数据结构体：保存字段的详细信息
 template<typename Class, typename T>
 struct FieldMeta {
@@ -115,7 +143,13 @@ struct TableMeta {
     static constexpr bool is_registered = false;
     static constexpr const char* options = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
     static constexpr bool has_indexes = false;
+    // 声明式索引（默认无；UORM_TABLE_END_WITH_INDEXES 生成）
+    static constexpr std::array<IndexMeta, 0> get_index_defs() { return {}; }
 };
+
+// 复合主键计数辅助
+#define UORM_VA_GETN(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15,a16,N,...) N
+#define UORM_VA_SIZE(...) UORM_VA_GETN(__VA_ARGS__,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1)
 
 // 辅助变量：检查类型是否已注册
 template<typename T>
@@ -147,6 +181,7 @@ constexpr bool is_registered_v = TableMeta<T>::is_registered;
         } \
         static constexpr const char* options = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"; \
         static constexpr bool has_indexes = false; \
+        static constexpr std::array<uORM::IndexMeta, 0> get_index_defs() { return {}; } \
     }; \
     }
 
@@ -224,7 +259,41 @@ constexpr bool strEq(const char* a, const char* b) {
         } \
         static constexpr const char* options = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"; \
         static constexpr bool has_indexes = false; \
+        static constexpr std::array<uORM::IndexMeta, 0> get_index_defs() { return {}; } \
     }; \
     }
 
 #define UORM_REFLECTION(Type, ...) UORM_REFLECTION_NAMED(Type, #Type, __VA_ARGS__)
+
+// ---------------------------------------------------------------------------
+// 声明式索引与复合主键
+// ---------------------------------------------------------------------------
+
+// 索引定义（配合 UORM_TABLE_END_WITH_INDEXES；最多 8 列）
+#define UORM_INDEX_DEF(Name, Unique, ...) \
+    (uORM::IndexMeta{ Name, Unique, { __VA_ARGS__ }, \
+        static_cast<unsigned char>(uORM::detail::indexCount(__VA_ARGS__)) })
+
+// 结束表注册（声明式索引）：建表后自动创建缺失索引（存在性检查，幂等）
+#define UORM_TABLE_END_WITH_INDEXES(TableOptions, ...) \
+            ); \
+        } \
+        static constexpr const char* options = TableOptions; \
+        static constexpr bool has_indexes = (UORM_VA_SIZE(__VA_ARGS__) > 0); \
+        static constexpr auto get_index_defs() { \
+            return std::array<uORM::IndexMeta, UORM_VA_SIZE(__VA_ARGS__)>{__VA_ARGS__}; \
+        } \
+    }; \
+    }
+
+// 复合主键声明（列名为字符串字面量；字段约束不写 PRIMARY KEY，由表级约束实现）
+//   UORM_COMPOSITE_PK(CompositeRow, "code", "seq")
+#define UORM_COMPOSITE_PK(Type, ...) \
+    namespace uORM { \
+    template<> struct CompositePK<Type> { \
+        static constexpr bool enabled = true; \
+        static constexpr auto columns() { \
+            return std::array<const char*, UORM_VA_SIZE(__VA_ARGS__)>{__VA_ARGS__}; \
+        } \
+    }; \
+    }

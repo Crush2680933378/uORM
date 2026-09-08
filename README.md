@@ -9,6 +9,10 @@ uORM 是一个现代化的、轻量级的 C++17 ORM 与 **Web 数据库管理台
 - **编译期映射**：`UORM_REFLECTION(User, id, name, age)` 一行注册；也支持完整列定义的 `UORM_TABLE_*` 宏。
 - **方言感知 DDL**：同一份实体定义在三库上建表（`AUTO_INCREMENT` / `GENERATED ... IDENTITY` / `AUTOINCREMENT`、`DATETIME`→`TIMESTAMP` 等自动转换）。
 - **安全查询**：统一 `?` 占位符 + 预编译参数绑定（PG 自动转 `$n`），杜绝 SQL 注入。
+- **声明式索引**：`UORM_TABLE_END_WITH_INDEXES` + `UORM_INDEX_DEF`（单列/唯一/复合索引），建表自动创建（存在性检查幂等）；`createIndex`/`dropIndex`/`indexExists` API。
+- **复合主键**：`UORM_COMPOSITE_PK(T, "colA", "colB")` 表级约束，update/remove/saveOrUpdate 全链路感知。
+- **外键**：字段约束写 `REFERENCES parent(id)` 即可（MySQL 的内联 REFERENCES 会被自动转成表级 FOREIGN KEY——MySQL 解析器接受但忽略内联写法的陷阱已处理）。
+- **轻量迁移**：`db.syncTable<T>()` 缺表建表、缺列自动补列（剥离不安全约束）、补建索引；另有 `addColumn`/`dropColumn`/`renameColumn`/`renameTable`/`tableExists`/`existingColumns`。
 - **类型安全查询**：`db.query<User>().where(&User::age, uORM::GT, 18).orderByDesc(&User::id).all()`——成员指针当列名，写错字段编译不过；同一组条件可直接 `.set(...).update()` / `.remove()`（无 WHERE 拒绝执行，防全表误操作）。
 - **RAII 事务作用域**：`auto tx = db.txBegin(); ...; tx->commit();`——忘提交/抛异常析构自动回滚，连接自动归还；也支持 `db.tx(lambda)`。
 - **批量插入**：`db.saveRange(items)` 单条多行 VALUES、按驱动参数上限分块、自增 id 三库各自正确写回。
