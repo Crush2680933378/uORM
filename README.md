@@ -10,7 +10,7 @@ uORM 是一个现代化的、轻量级的 C++17 ORM 与 **Web 数据库管理台
 - **方言感知 DDL**：同一份实体定义在三库上建表（`AUTO_INCREMENT` / `GENERATED ... IDENTITY` / `AUTOINCREMENT`、`DATETIME`→`TIMESTAMP` 等自动转换）。
 - **安全查询**：统一 `?` 占位符 + 预编译参数绑定（PG 自动转 `$n`），杜绝 SQL 注入。
 - **事务**：`IConnection::begin/commit/rollback` + RAII `Transaction` + `withTransaction(ds, lambda)`（异常自动回滚）。
-- **连接池**：`DataSource` 多数据源、有界池、获取超时、借出前 ping 健康检查、失效自动重建。
+- **连接池**：`DataSource` 多数据源、有界池、获取超时、空闲感知 ping（空闲 <30s 的连接直接复用，省一次往返）、失效自动重建。
 - **CRUD 全覆盖**：`save`（自增主键自动写回）/ `update` / `remove` / `findOne` / `select` / `count` / `sum` / `avg` / `max` / `min` / `saveOrUpdate`（upsert）/ `selectDynamic`（join/聚合投影）。
 
 ## 📦 依赖
@@ -83,42 +83,47 @@ UORM_TABLE_END()
 }
 ```
 
-### 3. CRUD
+### 3. CRUD（推荐：Database 门面）
 
 ```cpp
 try {
-    uORM::ConfigManager::getInstance().readDataBaseconfig("config.json");
-    auto& ds = uORM::ConnectionPool::instance().source();
+    uORM::DataSourceConfig cfg;
+    cfg.params.driver = "mysql";
+    cfg.params.host = "127.0.0.1";
+    cfg.params.port = 3306;
+    cfg.params.username = "root";
+    cfg.params.password = "***";
+    cfg.params.database = "uorm_db";
+    uORM::DataSource ds(cfg);
 
-    // 建表（方言自动适配）
-    uORM::Schema::createTable<User>();
+    uORM::Database db(ds);   // 绑定数据源，之后每个操作一行搞定
 
-    // 插入（自增 id 自动写回 user.id）
+    db.createTable<User>();
+
     User user{0, "Trae", 25};
-    uORM::Mapper<User>::save(user);
+    db.save(user);                                  // 自增 id 写回 user.id
+    auto tom = db.findById<User>(user.id);          // 按主键查
+    auto adults = db.find<User>("age >= ?", 18);    // 条件查
 
-    // 查询
-    auto row = uORM::Mapper<User>::findOne("name = ?", "Trae");
-    auto list = uORM::Mapper<User>::find("age > ?", 18);
-
-    // Query 构造器
     uORM::Query q;
     q.like("name", "%T%").ge("age", 18).orderBy("id", false).limit(10);
-    auto users = uORM::Mapper<User>::select(q);
+    auto users = db.select<User>(q);
 
-    // 事务（异常自动回滚）
-    uORM::withTransaction(ds, [&](uORM::IConnection& conn) {
-        uORM::Mapper<User>::save(user, conn);
+    std::vector<User> batch = /* ... */;
+    db.saveRange(batch);                            // 批量插入（单条多行 VALUES）
+
+    db.tx([&](uORM::IConnection& conn) {            // 事务（异常自动回滚）
         uORM::Mapper<User>::update(user, conn);
+        uORM::Mapper<User>::save(User{0, "Ann", 30}, conn);
     });
 
-    // Upsert
-    user.age = 26;
-    uORM::Mapper<User>::saveOrUpdate(user);
+    db.saveOrUpdate(user);                          // Upsert
 } catch (const uORM::Exception& e) {
     std::cerr << "uORM 错误: " << e.what() << std::endl;
 }
 ```
+
+仍兼容旧写法：`uORM::ConfigManager` 读 config.json + `uORM::ConnectionPool::instance()` 全局池 + 静态 `uORM::Mapper<T>::xxx`（含 config.json 加载）；所有 Mapper 操作也有 `IConnection&` 重载供事务内使用。
 
 ### 4. 多数据源（运行时选择驱动）
 
