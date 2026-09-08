@@ -2,8 +2,14 @@
 // uORM Web 控制台：浏览器直接管理 MySQL / PostgreSQL / SQLite。
 //
 // 用法:
-//   uORM_webconsole.exe [port] [静态目录] [--token XXXX]
-//   默认端口 8080；启动时生成随机管理令牌并打印（或用 --token 指定）。
+//   uORM_webconsole.exe [port] [--static DIR] [--data FILE] [--admin-password PW]
+//   默认端口 8080；首次启动自动创建超级管理员（用户名 admin，密码由
+//   --admin-password 指定，缺省 admin123），之后可在界面/接口中管理用户。
+
+// 角色：superadmin（超级管理员）/ admin（管理员）/ user（普通用户，只读）
+//   - superadmin：用户管理 + 连接管理 + 全部 SQL
+//   - admin：连接管理 + 全部 SQL（无用户管理）
+//   - user：数据浏览与 SELECT 查询（execute 与连接管理被拒绝）
 //
 // REST API（请求头 X-Auth-Token 鉴权）:
 //   POST   /api/login                              {token}
@@ -25,6 +31,7 @@
 #include <uORM/web/ConnectionManager.h>
 #include <uORM/web/StaticFiles.h>
 #include <uORM/web/JsonUtil.h>
+#include <uORM/web/UserStore.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -90,35 +97,206 @@ bool parseSqlBody(const HttpRequest& req, std::string& sql, std::vector<SqlValue
     }
 }
 
+// 角色级别：user=1 < admin=2 < superadmin=3
+int roleLevel(const std::string& role) {
+    if (role == "superadmin") return 3;
+    if (role == "admin") return 2;
+    if (role == "user") return 1;
+    return 0;
+}
+
+// 角色级别：user=1 < admin=2 < superadmin=3
+
 } // namespace
 
 int main(int argc, char** argv) {
     unsigned short port = 8080;
     std::string staticDir = "webapp/dist";
-    std::string token = genToken();
     std::string storePath = "connections.json";
+    std::string usersPath = "users.json";
+    std::string adminPassword;   // 为空 = 自动生成并打印
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--token" && i + 1 < argc) token = argv[++i];
+        if (a == "--admin-password" && i + 1 < argc) adminPassword = argv[++i];
+        else if (a == "--token" && i + 1 < argc) adminPassword = argv[++i]; // 兼容旧参数
+        else if (a == "--users" && i + 1 < argc) usersPath = argv[++i];
         else if (a == "--data" && i + 1 < argc) storePath = argv[++i];
         else if (a == "--static" && i + 1 < argc) staticDir = argv[++i];
-        else port = static_cast<unsigned short>(std::atoi(argv[i]));
+        else if (a.rfind("--", 0) == 0) { /* 忽略未知选项 */ }
+        else port = static_cast<unsigned short>(std::atoi(a.c_str()));
     }
 
+    // 引导超级管理员：首次启动（无任何用户）时创建 admin
+    {
+        UserStore boot(usersPath);
+        if (!boot.hasSuperAdmin()) {
+            std::string pw = adminPassword.empty() ? web::randomHex(8) : adminPassword;
+            boot.add("admin", pw, "superadmin");
+            boot.save();
+            std::cout << "[bootstrap] created superadmin user 'admin' with password '"
+                      << pw << "' (please change it)" << std::endl;
+        }
+    }
+
+    UserStore userStore(usersPath);
     ConnectionManager mgr(storePath);
+    web::SessionManager sessions;
 
     Router api;
 
-    // ---------------- 登录 ----------------
+    // ---------------- 角色检查 ----------------
+    // 返回会话；角色级别不足或未认证返回 nullopt
+    auto requireLevel = [&](const HttpRequest& req, int minLevel)
+        -> std::optional<web::SessionManager::Session> {
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty()) return std::nullopt;
+        if (roleLevel(sess.role) < minLevel) return std::nullopt;
+        return sess;
+    };
+
+
+    // ---------------- 认证 ----------------
     api.post("/api/login", [&](const HttpRequest& req) {
         try {
             auto body = uJSON::Value::parse(req.body);
-            if (body.contains("token") && body.at("token").get<std::string>() == token) {
-                return HttpResponse::json("{\"ok\":true}");
-            }
-        } catch (const std::exception&) {}
-        return HttpResponse::error(401, "invalid token");
+            std::string username = body.contains("username") ? body.at("username").get<std::string>() : "";
+            std::string password = body.contains("password") ? body.at("password").get<std::string>() : "";
+            if (!userStore.verify(username, password))
+                return HttpResponse::error(401, "用户名或密码错误");
+            std::string token = sessions.create(username, userStore.roleOf(username));
+            uJSON::Value out = uJSON::Value::object();
+            out["token"] = uJSON::Value(token);
+            out["username"] = uJSON::Value(username);
+            out["role"] = uJSON::Value(userStore.roleOf(username));
+            return HttpResponse::json(dump(out));
+        } catch (const std::exception& e) {
+            return HttpResponse::error(400, e.what());
+        }
+    });
+
+    // ---------------- 会话 ----------------
+
+    // ---------------- 会话信息 ----------------
+    api.get("/api/me", [&](const HttpRequest& req) {
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty()) return HttpResponse::error(401, "unauthorized");
+        uJSON::Value out = uJSON::Value::object();
+        out["username"] = uJSON::Value(sess.username);
+        out["role"] = uJSON::Value(userStore.roleOf(sess.username));
+        return HttpResponse::json(dump(out));
+    });
+
+    // ---------------- 修改自己的密码 ----------------
+    api.post("/api/auth/password", [&](const HttpRequest& req) {
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty()) return HttpResponse::error(401, "unauthorized");
+        std::string oldPw, newPw;
+        try {
+            auto body = uJSON::Value::parse(req.body);
+            oldPw = body.at("old").get<std::string>();
+            newPw = body.at("new").get<std::string>();
+        } catch (const std::exception& e) {
+            return HttpResponse::error(400, e.what());
+        }
+        if (!userStore.verify(sess.username, oldPw))
+            return HttpResponse::error(400, "旧密码错误");
+        if (newPw.size() < 6)
+            return HttpResponse::error(400, "新密码至少 6 位");
+        userStore.setPassword(sess.username, newPw);
+        userStore.save();
+        return HttpResponse::json("{\"ok\":true}");
+    });
+
+    // ---------------- 用户管理（仅超级管理员） ----------------
+    api.get("/api/users", [&](const HttpRequest& req) {
+        if (roleLevel(userStore.roleOf(sessions.validate(req.header("X-Auth-Token")).username)) < 3)
+            return HttpResponse::error(403, "需要超级管理员权限");
+        uJSON::Value arr = uJSON::Value::array();
+        for (const auto& u : userStore.list()) {
+            auto o = uJSON::Value::object();
+            o["username"] = uJSON::Value(u.username);
+            o["role"] = uJSON::Value(u.role);
+            o["createdAt"] = uJSON::Value(u.createdAt);
+            arr.push_back(o);
+        }
+        uJSON::Value out = uJSON::Value::object();
+        out["users"] = arr;
+        return HttpResponse::json(dump(out));
+    });
+
+    api.post("/api/users", [&](const HttpRequest& req) {
+        // 仅超级管理员可创建用户
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty() || userStore.roleOf(sess.username) != "superadmin")
+            return HttpResponse::error(403, "需要超级管理员权限");
+        try {
+            auto body = uJSON::Value::parse(req.body);
+            std::string username = body.at("username").get<std::string>();
+            std::string password = body.at("password").get<std::string>();
+            std::string role = body.contains("role") ? body.at("role").get<std::string>() : "user";
+            if (!web::isValidRole(role)) return HttpResponse::error(400, "invalid role");
+            if (password.size() < 6) return HttpResponse::error(400, "密码至少 6 位");
+            if (userStore.exists(username)) return HttpResponse::error(409, "用户已存在");
+            UserRecord r;
+            r.username = username;
+            r.salt = web::randomHex(16);
+            r.hash = web::hashPassword(r.salt, password);
+            r.role = role;
+            userStore.add(r.username, password, role);
+            userStore.save();
+            return HttpResponse::json("{\"username\":\"" + username + "\"}", 201);
+        } catch (const std::exception& e) {
+            return HttpResponse::error(400, e.what());
+        }
+    });
+
+    api.del("/api/users/{name}", [&](const HttpRequest& req) {
+        // 仅超级管理员可删除用户
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty() || userStore.roleOf(sess.username) != "superadmin")
+            return HttpResponse::error(403, "需要超级管理员权限");
+        std::string name = req.params.at("name");
+        if (name == sess.username) return HttpResponse::error(400, "不能删除自己");
+        if (!userStore.remove(name)) return HttpResponse::error(404, "用户不存在");
+        userStore.save();
+        return HttpResponse::json("{\"ok\":true}");
+    });
+
+    // ---- 修改用户角色（仅超级管理员） ----
+    api.put("/api/users/{name}/role", [&](const HttpRequest& req) {
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty() || userStore.roleOf(sess.username) != "superadmin")
+            return HttpResponse::error(403, "需要超级管理员权限");
+        std::string name = req.params.at("name");
+        try {
+            auto body = uJSON::Value::parse(req.body);
+            std::string role = body.at("role").get<std::string>();
+            if (!web::isValidRole(role)) return HttpResponse::error(400, "invalid role");
+            if (!userStore.setRole(name, role)) return HttpResponse::error(404, "用户不存在");
+            userStore.save();
+            return HttpResponse::json("{\"ok\":true}");
+        } catch (const std::exception& e) {
+            return HttpResponse::error(400, e.what());
+        }
+    });
+
+    // ---- 重置用户密码（仅超级管理员） ----
+    api.put("/api/users/{name}/password", [&](const HttpRequest& req) {
+        auto sess = sessions.validate(req.header("X-Auth-Token"));
+        if (sess.username.empty() || userStore.roleOf(sess.username) != "superadmin")
+            return HttpResponse::error(403, "需要超级管理员权限");
+        std::string name = req.params.at("name");
+        try {
+            auto body = uJSON::Value::parse(req.body);
+            std::string pw = body.at("password").get<std::string>();
+            if (pw.size() < 6) return HttpResponse::error(400, "密码至少 6 位");
+            if (!userStore.setPassword(name, pw)) return HttpResponse::error(404, "用户不存在");
+            userStore.save();
+            return HttpResponse::json("{\"ok\":true}");
+        } catch (const std::exception& e) {
+            return HttpResponse::error(400, e.what());
+        }
     });
 
     // ---------------- 驱动 ----------------
@@ -169,6 +347,7 @@ int main(int argc, char** argv) {
     });
 
     api.post("/api/connections", [&](const HttpRequest& req) {
+        if (!requireLevel(req, 2)) return HttpResponse::error(403, "需要管理员权限");
         try {
             ConnectionProfile p = profileFromBody(req);
             if (p.driver.empty() || p.database.empty()) {
@@ -183,6 +362,7 @@ int main(int argc, char** argv) {
     });
 
     api.del("/api/connections/{id}", [&](const HttpRequest& req) {
+        if (!requireLevel(req, 2)) return HttpResponse::error(403, "需要管理员权限");
         if (!mgr.remove(req.params.at("id"))) return HttpResponse::error(404, "no such connection");
         mgr.save();
         return HttpResponse::json("{\"ok\":true}");
@@ -402,6 +582,8 @@ int main(int argc, char** argv) {
     });
 
     api.post("/api/connections/{id}/execute", [&](const HttpRequest& req) {
+        auto sess = requireLevel(req, 2);
+        if (!sess) return HttpResponse::error(403, "需要管理员权限（普通用户只读）");
         auto src = requireSource(mgr, req);
         if (!src) return HttpResponse::error(404, "no such connection");
         std::string sql, err;
@@ -421,6 +603,8 @@ int main(int argc, char** argv) {
 
     // ---- 建表 DDL ----
     api.get("/api/connections/{id}/tables/{table}/ddl", [&](const HttpRequest& req) {
+        auto sess = requireLevel(req, 2);
+        if (!sess) return HttpResponse::error(403, "需要管理员权限");
         auto src = requireSource(mgr, req);
         if (!src) return HttpResponse::error(404, "no such connection");
         std::string table = req.params.at("table");
@@ -475,11 +659,11 @@ int main(int argc, char** argv) {
     StaticFiles staticFiles(staticDir);
     auto handle = [&](const HttpRequest& req) -> HttpResponse {
         if (req.path.rfind("/api/", 0) == 0 || req.path == "/api") {
-            // 鉴权（除登录）
+            // 统一会话鉴权（登录除外）
             if (req.path != "/api/login") {
-                if (req.header("X-Auth-Token") != token) {
+                auto sess = sessions.validate(req.header("X-Auth-Token"));
+                if (sess.username.empty())
                     return HttpResponse::error(401, "unauthorized");
-                }
             }
             return api.dispatch(req);
         }
@@ -496,9 +680,8 @@ int main(int argc, char** argv) {
     std::cout << "====================================" << std::endl;
     std::cout << "  uORM Web Console" << std::endl;
     std::cout << "  http://127.0.0.1:" << port << "/" << std::endl;
-    std::cout << "  Admin token: " << token << std::endl;
+    std::cout << "  Login: username + password (users.json)" << std::endl;
     std::cout << "  Static dir : " << staticDir << std::endl;
-    std::cout << "  Connections: " << storePath << std::endl;
     std::cout << "====================================" << std::endl;
     server.run();
     return 0;

@@ -22,17 +22,27 @@ async function req(method, path, body) {
 }
 
 export const api = {
-  async login(t) {
+  async login(username, password) {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: t }),
+      body: JSON.stringify({ username, password }),
     })
-    if (!res.ok) throw new Error('令牌无效')
-    setToken(t)
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || '登录失败')
+    setToken(data.token)
+    return { username: data.username, role: data.role }
+  },
+  async me() {
+    return req('GET', '/api/me')
   },
   logout: () => localStorage.removeItem(TOKEN_KEY),
   drivers: () => req('GET', '/api/drivers'),
+  users: () => req('GET', '/api/users'),
+  addUser: (p) => req('POST', '/api/users', p),
+  delUser: (name) => req('DELETE', `/api/users/${encodeURIComponent(name)}`),
+  setUserRole: (name, role) => req('PUT', `/api/users/${encodeURIComponent(name)}/role`, { role }),
+  setUserPassword: (name, pw) => req('PUT', `/api/users/${encodeURIComponent(name)}/password`, { password: pw }),
   listConn: () => req('GET', '/api/connections'),
   addConn: (p) => req('POST', '/api/connections', p),
   delConn: (id) => req('DELETE', `/api/connections/${id}`),
