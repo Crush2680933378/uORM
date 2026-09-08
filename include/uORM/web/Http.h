@@ -44,13 +44,26 @@ struct HttpRequest {
     }
 
     static std::string urlDecode(const std::string& s) {
+        auto hexVal = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
         std::string out;
         out.reserve(s.size());
         for (std::size_t i = 0; i < s.size(); ++i) {
             if (s[i] == '%' && i + 2 < s.size()) {
-                out += static_cast<char>(std::strtol(s.substr(i + 1, 2).c_str(), nullptr, 16));
-                i += 2;
-            } else if (s[i] == '+') {
+                int hi = hexVal(s[i + 1]);
+                int lo = hexVal(s[i + 2]);
+                if (hi >= 0 && lo >= 0) {
+                    out += static_cast<char>(hi * 16 + lo);
+                    i += 2;
+                    continue;
+                }
+                // 非法十六进制：原样保留 '%'
+            }
+            if (s[i] == '+') {
                 out += ' ';
             } else {
                 out += s[i];

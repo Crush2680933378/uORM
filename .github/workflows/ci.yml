@@ -51,11 +51,16 @@ jobs:
       - name: Unit tests
         run: ./build/uorm_test_unit
 
+      - name: Web layer tests
+        run: ./build/uorm_test_web
+
       - name: C ABI tests
         run: ./build/uorm_test_c_abi
 
       - name: Integration tests (SQLite + MySQL + PostgreSQL)
-        run: ./build/uorm_test_integration
+        run: |
+          ./build/uorm_test_integration
+          ./build/uorm_test_scenarios
         env:
           UORM_TEST_MYSQL_HOST: 127.0.0.1
           UORM_TEST_MYSQL_PORT: "3306"
@@ -101,8 +106,13 @@ jobs:
       - name: Unit tests
         run: ./build/uorm_test_unit.exe
 
+      - name: Web layer tests
+        run: ./build/uorm_test_web.exe
+
       - name: C ABI tests
         run: ./build/uorm_test_c_abi.exe
 
       - name: Integration tests (SQLite)
-        run: ./build/uorm_test_integration.exe
+        run: |
+          ./build/uorm_test_integration.exe
+          ./build/uorm_test_scenarios.exe

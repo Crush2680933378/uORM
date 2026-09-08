@@ -164,11 +164,13 @@ public:
     }
 
     Query& limit(int limit) {
+        limitValue_ = limit;
         limitClause_ = " LIMIT " + std::to_string(limit);
         return *this;
     }
 
     Query& offset(int offset) {
+        offsetValue_ = offset;
         offsetClause_ = " OFFSET " + std::to_string(offset);
         return *this;
     }
@@ -182,6 +184,10 @@ public:
     std::string getHaving() const { return havingClause_; }
     std::string getJoins() const { return joins_; }
     bool isDistinct() const { return distinct_; }
+
+    // 结构化分页值（-1 = 未设置）：方言子句生成用
+    int limitValue() const { return limitValue_; }
+    int offsetValue() const { return offsetValue_; }
 
     const std::vector<std::string>& getColumns() const { return columns_; }
     const std::string& getSelectRaw() const { return selectRaw_; }
@@ -203,6 +209,8 @@ private:
     int groupDepth_ = 0;
     bool pendingGroupTerm_ = false;
     bool distinct_ = false;
+    int limitValue_ = -1;
+    int offsetValue_ = -1;
 
     // 条件起始：决定连接符与括号内首条件
     void beginTerm() {

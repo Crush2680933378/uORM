@@ -73,34 +73,30 @@ public:
                     --totalCreated_; // 失效连接移出计数，由重建补位
                     delete entry.conn;
                     lock.unlock();
-                    try {
-                        IConnection* fresh = createConnection();
+
+                    IConnection* fresh = createReserved();
+                    if (!fresh) {
                         lock.lock();
-                        ++inUse_;
-                        return wrap(fresh);
-                    } catch (const Exception&) {
-                        throw ConnectionError("DataSource '" + name() + "': connection lost and reconnect failed");
+                        waitUntil(lock, deadline);
+                        continue;
                     }
+                    lock.lock();
+                    ++inUse_;
+                    return wrap(fresh);
                 }
                 return wrap(entry.conn);
             }
 
-            if (totalCreated_ < config_.poolSize) {
-                lock.unlock();
-                IConnection* conn = nullptr;
-                try {
-                    conn = createConnection(); // 成功时内部已计数
-                } catch (const Exception&) {
-                    lock.lock();
-                    waitUntil(lock, deadline);
-                    continue;
-                }
-                lock.lock();
+            // 释放锁后创建连接（createReserved 内部需要加锁）
+            lock.unlock();
+            IConnection* conn = createReserved();
+            lock.lock();
+            if (conn) {
                 ++inUse_;
                 return wrap(conn);
             }
 
-            // 池满：等待归还
+            // 名额已满：等待归还
             if (!waitUntil(lock, deadline)) {
                 throw ConnectionError("DataSource '" + name() +
                                       "': acquire timeout after " +
@@ -164,11 +160,21 @@ private:
         });
     }
 
-    IConnection* createConnection() {
-        // 只在成功时计数，避免失败路径虚增池上限
-        auto conn = DriverRegistry::instance().createOrThrow(config_.params);
-        ++totalCreated_;
-        return conn.release();
+    // 预占名额并创建连接（锁外建连，名额在锁内预留，并发下不超池上限）。
+    // 名额满返回 nullptr；创建失败回滚名额并重抛异常。
+    IConnection* createReserved() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (totalCreated_ >= config_.poolSize) return nullptr;
+            ++totalCreated_;
+        }
+        try {
+            return DriverRegistry::instance().createOrThrow(config_.params).release();
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --totalCreated_;
+            throw;
+        }
     }
 
     std::unique_ptr<IConnection> createConnectionChecked() const {

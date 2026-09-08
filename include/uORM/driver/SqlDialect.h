@@ -40,6 +40,16 @@ public:
     // 表选项（MySQL: ENGINE=InnoDB...，PG/SQLite: 空）
     virtual std::string getTableOptions(const std::string& defaultOptions) const = 0;
 
+    // LIMIT/OFFSET 子句：offset 不带 limit 在 MySQL/SQLite 是语法错误，
+    // 由方言生成合法组合（PG: OFFSET n；MySQL: LIMIT 18446744073709551615 OFFSET n；
+    // SQLite: LIMIT -1 OFFSET n）。
+    virtual std::string limitOffsetClause(int limit, int offset) const {
+        if (limit >= 0 && offset >= 0) return " LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+        if (limit >= 0) return " LIMIT " + std::to_string(limit);
+        if (offset >= 0) return " OFFSET " + std::to_string(offset);
+        return "";
+    }
+
     // 旧接口兼容：获取最后插入 ID 的 SQL
     virtual std::string getLastInsertIdSql() const = 0;
 };
@@ -84,6 +94,14 @@ public:
     bool supportsReturningId() const override { return false; }
     std::string getTableOptions(const std::string& defaultOptions) const override { return defaultOptions; }
     std::string getLastInsertIdSql() const override { return "SELECT LAST_INSERT_ID()"; }
+
+    // MySQL 不允许负 LIMIT，也不允许 OFFSET 脱离 LIMIT；用最大无符号值表示"不限"
+    std::string limitOffsetClause(int limit, int offset) const override {
+        if (limit >= 0 && offset >= 0) return " LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+        if (limit >= 0) return " LIMIT " + std::to_string(limit);
+        if (offset >= 0) return " LIMIT 18446744073709551615 OFFSET " + std::to_string(offset);
+        return "";
+    }
 };
 
 // PostgreSQL 方言实现
