@@ -73,4 +73,34 @@ auto withTransaction(DataSource& ds, F&& f) -> decltype(std::declval<F>()(std::d
     }
 }
 
+// 事务作用域守卫：借出连接 + BEGIN；commit() 显式提交，
+// 未提交（异常或忘记调用）析构时自动回滚；连接随守卫析构归还池。
+//
+//   {
+//       auto tx = db.txBegin();
+//       Mapper<User>::save(u, *tx);
+//       tx->commit();
+//   }   // 连接归还
+//
+class TxScope {
+public:
+    explicit TxScope(DataSource& ds)
+        : conn_(ds.getConnection()), tx_(std::make_unique<Transaction>(*conn_)) {}
+
+    TxScope(TxScope&&) = default;
+    TxScope& operator=(TxScope&&) = delete;
+    TxScope(const TxScope&) = delete;
+    TxScope& operator=(const TxScope&) = delete;
+
+    IConnection& operator*() { return *conn_; }
+    IConnection* operator->() { return conn_.get(); }
+
+    void commit() { tx_->commit(); }
+    void rollback() { tx_->rollback(); }
+
+private:
+    PooledConnection conn_;
+    std::unique_ptr<Transaction> tx_;
+};
+
 } // namespace uORM

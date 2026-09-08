@@ -542,6 +542,20 @@ public:
         return col;
     }
 
+    // 成员指针 -> 列名；未注册的成员/外来类的成员返回空串（TypedQuery 依赖此映射）。
+    // 接受任意类的成员指针，避免对"别的类"的成员产生模板推导硬错误。
+    template<typename V, typename C>
+    static std::string columnNameOf(V C::* ptr) {
+        std::string col;
+        if constexpr (std::is_same_v<C, T>) {
+            auto fields = TableMeta<T>::get_fields();
+            std::apply([&](auto&&... field) {
+                (pickColumn(col, field, ptr), ...);
+            }, fields);
+        }
+        return col;
+    }
+
     // 批量插入：分块的单条多行 VALUES 语句，自增主键按序写回每个元素。
     // 批量走统一列集（除自增主键外全部列），不做逐行"空串+默认值跳过"，
     // 因此由调用方保证 NOT NULL/默认值字段的值有效。
@@ -678,6 +692,14 @@ private:
         else if constexpr (std::is_floating_point_v<V>) return value == 0.0;
         else if constexpr (std::is_same_v<V, std::string>) return value.empty();
         else return false;
+    }
+
+    // 类型匹配时记录列名（member_ptr 与 ptr 同类型才可能相等）
+    template<typename FieldMetaT, typename V>
+    static void pickColumn(std::string& col, FieldMetaT&& field, V T::* ptr) {
+        if constexpr (std::is_same_v<decltype(field.member_ptr), V T::*>) {
+            if (col.empty() && field.member_ptr == ptr) col = field.column_name;
+        }
     }
 
     static bool hasDefaultConstraint(const char* constraints) {

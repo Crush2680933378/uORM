@@ -348,6 +348,30 @@ void demonstrateDatabaseFacade() {
     std::cout << "[门面] 事务更新 " << (ok ? "成功" : "失败")
               << ", 标签总数=" << uORM::valueToInt64(db.aggregate<Tag>("COUNT(*)"))
               << std::endl;
+
+    // 类型安全查询：成员指针当列名，写错字段编译不过
+    auto hot = db.query<Tag>()
+                   .like(&Tag::name, "b%")
+                   .orderByDesc(&Tag::id)
+                   .limit(5)
+                   .all();
+    std::cout << "[类型查询] LIKE 'b%' 命中 " << hot.size() << " 条: ";
+    for (const auto& t : hot) std::cout << t.name << " ";
+    std::cout << std::endl;
+
+    // RAII 事务作用域：commit() 提交，忘提交析构自动回滚
+    {
+        auto tx = db.txBegin();
+        Tag t{0, "delta"};
+        uORM::Mapper<Tag>::save(t, *tx);
+        tx->commit();
+    }
+    std::cout << "[RAII事务] delta 已提交, 总数="
+              << uORM::valueToInt64(db.aggregate<Tag>("COUNT(*)")) << std::endl;
+
+    // 同一条件驱动 UPDATE（无条件会拒绝执行，防全表误改）
+    db.query<Tag>().where(&Tag::name, uORM::Op::EQ, std::string("delta"))
+        .set(&Tag::name, std::string("delta-v2")).update();
 }
 
 int main() {
