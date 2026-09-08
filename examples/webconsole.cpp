@@ -218,29 +218,46 @@ int main(int argc, char** argv) {
         auto src = requireSource(mgr, req);
         if (!src) return HttpResponse::error(404, "no such connection");
         try {
-            QueryResult r = src->withConnection([](IConnection& conn) {
+            QueryResult tables, views;
+            src->withConnection([&](IConnection& conn) {
                 auto dialect = conn.dialect();
                 switch (dialect->kind()) {
                     case DialectKind::MySQL:
-                        return executeQuery(conn,
-                            "SELECT TABLE_NAME AS name FROM information_schema.TABLES "
+                        tables = executeQuery(conn,
+                            "SELECT TABLE_NAME FROM information_schema.TABLES "
                             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME");
+                        views = executeQuery(conn,
+                            "SELECT TABLE_NAME FROM information_schema.VIEWS "
+                            "WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME");
+                        break;
                     case DialectKind::PostgreSQL:
-                        return executeQuery(conn,
-                            "SELECT c.relname AS name FROM pg_class c "
+                        tables = executeQuery(conn,
+                            "SELECT c.relname FROM pg_class c "
                             "JOIN pg_namespace n ON n.oid = c.relnamespace "
                             "WHERE n.nspname = current_schema() AND c.relkind = 'r' ORDER BY c.relname");
+                        views = executeQuery(conn,
+                            "SELECT viewname FROM pg_views "
+                            "WHERE schemaname = current_schema() ORDER BY viewname");
+                        break;
                     case DialectKind::SQLite:
                     default:
-                        return executeQuery(conn,
+                        tables = executeQuery(conn,
                             "SELECT name FROM sqlite_master WHERE type='table' "
                             "AND name NOT LIKE 'sqlite_%' ORDER BY name");
+                        views = executeQuery(conn,
+                            "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name");
+                        break;
                 }
+                return 0;
             });
-            uJSON::Value arr = uJSON::Value::array();
-            for (const auto& row : r.rows) arr.push_back(jsonValue(row[0]));
+            auto toArray = [](QueryResult& r) {
+                uJSON::Value arr = uJSON::Value::array();
+                for (const auto& row : r.rows) arr.push_back(jsonValue(row[0]));
+                return arr;
+            };
             uJSON::Value out = uJSON::Value::object();
-            out["tables"] = arr;
+            out["tables"] = toArray(tables);
+            out["views"] = toArray(views);
             return HttpResponse::json(dump(out));
         } catch (const Exception& e) {
             return HttpResponse::error(502, e.what());
@@ -396,6 +413,58 @@ int main(int argc, char** argv) {
             });
             uJSON::Value out = uJSON::Value::object();
             out["affected"] = jsonValue(static_cast<long long>(affected));
+            return HttpResponse::json(dump(out));
+        } catch (const Exception& e) {
+            return HttpResponse::error(502, e.what());
+        }
+    });
+
+    // ---- 建表 DDL ----
+    api.get("/api/connections/{id}/tables/{table}/ddl", [&](const HttpRequest& req) {
+        auto src = requireSource(mgr, req);
+        if (!src) return HttpResponse::error(404, "no such connection");
+        std::string table = req.params.at("table");
+        if (!validIdentifier(table)) return HttpResponse::error(400, "invalid table name");
+        try {
+            std::string ddl = src->withConnection([&](IConnection& conn) -> std::string {
+                auto dialect = conn.dialect();
+                switch (dialect->kind()) {
+                    case DialectKind::MySQL: {
+                        auto r = executeQuery(conn, "SHOW CREATE TABLE " + dialect->quoteIdentifier(table));
+                        if (!r.rows.empty()) return valueToString(r.rows[0][1]);
+                        return "";
+                    }
+                    case DialectKind::PostgreSQL: {
+                        auto r = executeQuery(conn,
+                            "SELECT '  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod) || "
+                            "  CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END || "
+                            "  CASE WHEN a.atthasdef THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END "
+                            "FROM pg_attribute a "
+                            "JOIN pg_class cl ON cl.oid = a.attrelid "
+                            "JOIN pg_namespace n ON n.oid = cl.relnamespace "
+                            "LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum "
+                            "WHERE n.nspname = current_schema() AND cl.relname = ? AND a.attnum > 0 AND NOT a.attisdropped "
+                            "ORDER BY a.attnum", {SqlValue(table)});
+                        if (r.rows.empty()) return "";
+                        std::string cols;
+                        for (const auto& row : r.rows) {
+                            if (!cols.empty()) cols += ",\n";
+                            cols += valueToString(row[0]);
+                        }
+                        return "CREATE TABLE " + dialect->quoteIdentifier(table) + " (\n" + cols + "\n);";
+                    }
+                    case DialectKind::SQLite:
+                    default: {
+                        auto r = executeQuery(conn,
+                            "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?",
+                            {SqlValue(table)});
+                        if (!r.rows.empty()) return valueToString(r.rows[0][0]);
+                        return "";
+                    }
+                }
+            });
+            uJSON::Value out = uJSON::Value::object();
+            out["ddl"] = uJSON::Value(ddl);
             return HttpResponse::json(dump(out));
         } catch (const Exception& e) {
             return HttpResponse::error(502, e.what());
