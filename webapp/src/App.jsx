@@ -19,6 +19,7 @@ function EmptyHint({ text }) {
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken())
+  const [me, setMe] = useState({ username: '', role: '' })   // 当前登录者
   const [connections, setConnections] = useState([])
   const [drivers, setDrivers] = useState([])
   const [tablesMap, setTablesMap] = useState({})    // connId -> [{name}]
@@ -64,19 +65,33 @@ export default function App() {
   useEffect(() => {
     if (!authed) return
     api.drivers().then((d) => setDrivers(d.drivers || [])).catch(() => {})
+    api.me().then((m) => setMe({ username: m.username, role: m.role })).catch(() => {})
     refreshConnections()
+    refreshUsers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed])
+
+  const isSuper = me.role === 'superadmin'
+  const isAdmin = me.role === 'admin' || isSuper
+  const canWrite = isAdmin  // 普通用户只读
+
+  const refreshUsers = () => {
+    if (!isSuper) return
+    api.users().then((d) => setUsersList(d.users || [])).catch(() => {})
+  }
 
   if (!authed) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f1f5f9' }}>
         <Card title="uORM 数据库管理台" style={{ width: 380 }}>
-          <Form onFinish={async ({ token }) => {
-            try { await api.login(token); setAuthed(true) } catch (e) { message.error(e.message) }
+          <Form onFinish={async ({ username, password }) => {
+            try { await api.login(username, password); setAuthed(true) } catch (e) { message.error(e.message) }
           }}>
-            <Form.Item name="token" rules={[{ required: true, message: '请输入管理令牌' }]}>
-              <Input.Password placeholder="管理令牌（服务启动时打印）" autoFocus />
+            <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+              <Input placeholder="用户名" autoFocus />
+            </Form.Item>
+            <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
+              <Input.Password placeholder="密码" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block>登 录</Button>
           </Form>
@@ -211,11 +226,17 @@ export default function App() {
             <Button type="primary" size="small" icon={<PlusOutlined />}
               disabled={!activeConnId}
               onClick={() => openSqlTab(activeConnId)}>新建查询</Button>
-            <Button size="small" icon={<ReloadOutlined />} onClick={refreshAll} />
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => { refreshAll(); refreshUsers() }} />
+            {isSuper && (
+              <Button size="small" icon={<SettingOutlined />}
+                onClick={() => openTab({ key: 'users', type: 'users', title: <span><SettingOutlined /> 用户管理</span> })}>
+                用户管理
+              </Button>
+            )}
           </Space>
           <div style={{ flex: 1 }} />
           <Text style={{ color: '#94a3b8', fontSize: 12, marginRight: 12 }}>
-            {connections.length} 个连接
+            {connections.length} 个连接 · {me.username}（{me.role}）
           </Text>
           <Button size="small" icon={<LogoutOutlined />}
             onClick={() => { clearToken(); setAuthed(false); setTabs([]) }} />
@@ -235,9 +256,10 @@ export default function App() {
                 label: t.title,
                 closable: true,
                 children:
-                  t.type === 'table' ? <TableGrid connId={t.connId} table={t.table} readOnly={t.readOnly} /> :
-                  t.type === 'sql' ? <SqlConsole connId={t.connId} /> :
+                  t.type === 'table' ? <TableGrid connId={t.connId} table={t.table} readOnly={t.readOnly} canEdit={canWrite} /> :
+                  t.type === 'sql' ? <SqlConsole connId={t.connId} canWrite={canWrite} /> :
                   t.type === 'conn' ? <Connections connections={connections} drivers={drivers} onChange={refreshConnections} /> :
+                  t.type === 'users' ? <Users users={usersList} onChange={() => { refreshUsers() }} /> :
                   <EmptyHint text="在左侧展开表树进行浏览" />,
               }))}
             />
