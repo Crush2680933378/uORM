@@ -253,23 +253,38 @@ int main(int argc, char** argv) {
         std::string table = req.params.at("table");
         if (!validIdentifier(table)) return HttpResponse::error(400, "invalid table name");
         try {
+            // 归一化输出：[name, type, nullable, default, isPK] —— 供前端行内编辑定位主键
             QueryResult r = src->withConnection([&table](IConnection& conn) {
                 auto dialect = conn.dialect();
                 switch (dialect->kind()) {
                     case DialectKind::MySQL:
                         return executeQuery(conn,
-                            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY "
+                            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, IFNULL(COLUMN_DEFAULT,''), "
+                            "(COLUMN_KEY = 'PRI') "
                             "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
                             "AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION", {SqlValue(table)});
                     case DialectKind::PostgreSQL:
                         return executeQuery(conn,
-                            "SELECT column_name, data_type, is_nullable, column_default "
-                            "FROM information_schema.COLUMNS WHERE table_schema = current_schema() "
-                            "AND table_name = ? ORDER BY ordinal_position", {SqlValue(table)});
+                            "SELECT c.column_name, c.data_type, c.is_nullable, "
+                            "COALESCE(c.column_default,''), "
+                            "COALESCE((SELECT 1 FROM information_schema.table_constraints tc "
+                            "  JOIN information_schema.key_column_usage k "
+                            "    ON tc.constraint_name = k.constraint_name "
+                            "   AND tc.table_schema  = k.table_schema "
+                            "   AND tc.table_name    = k.table_name "
+                            "  WHERE tc.constraint_type = 'PRIMARY KEY' "
+                            "    AND tc.table_name = c.table_name "
+                            "    AND tc.table_schema = c.table_schema "
+                            "    AND k.column_name = c.column_name), 0) "
+                            "FROM information_schema.columns c "
+                            "WHERE c.table_schema = current_schema() AND c.table_name = ? "
+                            "ORDER BY c.ordinal_position", {SqlValue(table)});
                     case DialectKind::SQLite:
                     default:
                         return executeQuery(conn,
-                            "PRAGMA table_info(" + dialect->quoteIdentifier(table) + ")");
+                            "SELECT name, type, CASE WHEN \"notnull\" = 1 THEN 'NO' ELSE 'YES' END, "
+                            "COALESCE(\"dflt_value\",''), pk "
+                            "FROM pragma_table_info(" + dialect->quoteIdentifier(table) + ")");
                 }
             });
             uJSON::Value out = uJSON::Value::object();

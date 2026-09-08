@@ -1,153 +1,230 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Card, Form, Input, Layout, Menu, message, Modal, Space, Tag, Typography } from 'antd'
+import { Button, Card, Form, Input, Layout, message, Space, Tabs, Tag, Tree, Typography } from 'antd'
 import {
   DatabaseOutlined, TableOutlined, ConsoleSqlOutlined,
-  SettingOutlined, LogoutOutlined, ReloadOutlined,
+  SettingOutlined, LogoutOutlined, ReloadOutlined, PlusOutlined,
 } from '@ant-design/icons'
-import { api } from './api.js'
+import { api, getToken, clearToken } from './api.js'
 import Connections from './pages/Connections.jsx'
-import Browser from './pages/Browser.jsx'
-import Console from './pages/Console.jsx'
+import TableGrid from './components/TableGrid.jsx'
+import SqlConsole from './components/SqlConsole.jsx'
 
-const { Sider, Content, Header } = Layout
+const { Sider, Content, Header, Footer } = Layout
 const { Text } = Typography
 
+// 空态占位
+function EmptyHint({ text }) {
+  return <Card><Text type="secondary">{text}</Text></Card>
+}
+
 export default function App() {
-  const [authed, setAuthed] = useState(!!localStorage.getItem('uorm_token'))
-  const [tokenInput, setTokenInput] = useState('')
+  const [authed, setAuthed] = useState(!!getToken())
   const [connections, setConnections] = useState([])
   const [drivers, setDrivers] = useState([])
-  const [activeConn, setActiveConn] = useState(null)
-  const [tables, setTables] = useState([])
-  const [activeTable, setActiveTable] = useState(null)
-  const [view, setView] = useState('browser')
-  const [collapsed, setCollapsed] = useState(false)
+  const [tablesMap, setTablesMap] = useState({})    // connId -> [{name}]
+  const [columnsMap, setColumnsMap] = useState({})  // `connId:table` -> [[name,type,...],...]
+  const [activeConnId, setActiveConnId] = useState(null)
+  const [tabs, setTabs] = useState([])              // {key,type,connId,table,title}
+  const [activeKey, setActiveKey] = useState(null)
 
   const refreshConnections = async () => {
     try {
       const data = await api.listConn()
-      setConnections(data.connections || [])
-      setActiveConn((prev) => {
-        if (prev && (data.connections || []).some((c) => c.id === prev)) return prev
-        return (data.connections || [])[0]?.id ?? null
+      const conns = data.connections || []
+      setConnections(conns)
+      setActiveConnId((prev) => (prev && conns.some((c) => c.id === prev)) ? prev : (conns[0]?.id ?? null))
+      // 预取每个连接的表列表（树形展示）
+      conns.forEach(async (c) => {
+        try {
+          const res = await api.tables(c.id)
+          setTablesMap((m) => ({ ...m, [c.id]: (res.tables || []).map((name) => ({ name })) }))
+        } catch { setTablesMap((m) => ({ ...m, [c.id]: [] })) }
       })
+      return conns
     } catch (e) {
-      message.error(e.message)
+      if (e.message !== 'Failed to fetch') message.error(e.message)
+      return []
     }
   }
 
-  const refreshTables = async (connId) => {
-    if (!connId) { setTables([]); return }
-    try {
-      const data = await api.tables(connId)
-      setTables(data.tables || [])
-      setActiveTable((prev) => (prev && (data.tables || []).includes(prev)) ? prev : null)
-    } catch (e) {
-      message.error(e.message)
-      setTables([])
-    }
+  const loadTables = (connId) => {
+    api.tables(connId)
+      .then((data) => setTablesMap((m) => ({ ...m, [connId]: (data.tables || []).map((name) => ({ name })) })))
+      .catch(() => setTablesMap((m) => ({ ...m, [connId]: [] })))
   }
 
   useEffect(() => {
     if (!authed) return
-    api.drivers().then((d) => setDrivers(d.drivers || []))
+    api.drivers().then((d) => setDrivers(d.drivers || [])).catch(() => {})
     refreshConnections()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed])
 
   if (!authed) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f1f5f9' }}>
         <Card title="uORM 数据库管理台" style={{ width: 380 }}>
-          <Form
-            onFinish={async ({ token }) => {
-              try {
-                await api.login(token)
-                setAuthed(true)
-              } catch (e) {
-                message.error(e.message)
-              }
-            }}
-          >
+          <Form onFinish={async ({ token }) => {
+            try { await api.login(token); setAuthed(true) } catch (e) { message.error(e.message) }
+          }}>
             <Form.Item name="token" rules={[{ required: true, message: '请输入管理令牌' }]}>
               <Input.Password placeholder="管理令牌（服务启动时打印）" autoFocus />
             </Form.Item>
-            <Button type="primary" htmlType="submit" block>登录</Button>
+            <Button type="primary" htmlType="submit" block>登 录</Button>
           </Form>
         </Card>
       </div>
     )
   }
 
-  const active = connections.find((c) => c.id === activeConn)
+  // ---------------- 标签页 ----------------
+  const openTab = (tab) => {
+    setTabs((ts) => (ts.some((t) => t.key === tab.key) ? ts : [...ts, tab]))
+    setActiveKey(tab.key)
+  }
+  const removeTab = (key) => {
+    setTabs((ts) => {
+      const idx = ts.findIndex((t) => t.key === key)
+      const next = ts.filter((t) => t.key !== key)
+      setActiveKey((ak) => (ak === key && next.length) ? next[Math.max(0, idx - 1)].key : (next[0]?.key ?? null))
+      return next
+    })
+  }
 
-  const sider = (
-    <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={230} theme="light"
-      style={{ borderRight: '1px solid #eee' }}>
-      <div style={{ padding: 16, fontWeight: 700, textAlign: 'center' }}>
-        <DatabaseOutlined /> uORM
-      </div>
-      <Text type="secondary" style={{ padding: '0 16px', fontSize: 12 }}>连接</Text>
-      <Menu
-        selectedKeys={[activeConn || '']}
-        onClick={({ key }) => { setActiveConn(key); setActiveTable(null); refreshTables(key) }}
-        items={connections.map((c) => ({
-          key: c.id,
-          icon: <DatabaseOutlined />,
-          label: <Space size={4}><span>{c.name || c.database}</span><Tag>{c.driver}</Tag></Space>,
-        }))}
-      />
-      <Text type="secondary" style={{ padding: '0 16px', fontSize: 12 }}>表</Text>
-      <Menu
-        selectedKeys={[activeTable || '']}
-        onClick={({ key }) => setActiveTable(key)}
-        items={tables.map((t) => ({ key: t, icon: <TableOutlined />, label: t }))}
-      />
-    </Sider>
-  )
+  const openTableTab = (connId, table) => {
+    const conn = connections.find((c) => c.id === connId)
+    openTab({
+      key: `t:${connId}:${table}`, type: 'table', connId, table,
+      title: <span><TableOutlined /> {table}</span>,
+    })
+  }
+  const openSqlTab = (connId) => {
+    const conn = connections.find((c) => c.id === connId)
+    openTab({
+      key: `s:${connId}`, type: 'sql', connId,
+      title: <span><ConsoleSqlOutlined /> 查询</span>,
+    })
+  }
+  const openConnTab = () => openTab({
+    key: 'conn', type: 'conn', title: <span><SettingOutlined /> 连接管理</span>,
+  })
+
+  const active = tabs.find((t) => t.key === activeKey)
+  const activeConn = active ? connections.find((c) => c.id === active.connId) : null
+
+  // ---------------- 对象树 ----------------
+  const treeData = connections.map((c) => ({
+    key: c.id,
+    icon: <DatabaseOutlined style={{ color: '#2563eb' }} />,
+    title: <span>{c.name} <Tag style={{ marginLeft: 4 }}>{c.driver}</Tag></span>,
+    children: (tablesMap[c.id] || []).map((t) => ({
+      key: `t:${c.id}:${t.name}`,
+      icon: <TableOutlined />,
+      title: t.name,
+      isLeaf: false,
+      children: (columnsMap[`${c.id}:${t.name}`] || []).map((col) => ({
+        key: `c:${c.id}:${t.name}:${col[0]}`,
+        title: <span style={{ fontSize: 12, color: '#64748b' }}>{col[0]} <span style={{ color: '#94a3b8' }}>{String(col[1]).split('(')[0]}</span></span>,
+        selectable: false,
+      })),
+    })),
+  }))
+
+  const onLoadTreeData = (treeNode) =>
+    new Promise(async (resolve) => {
+      const key = treeNode.key || ''
+      if (key.startsWith('t:')) {
+        const [, connId, ...rest] = key.split(':')
+        const table = rest.join(':')
+        try {
+          const res = await api.columns(connId, table)
+          setColumnsMap((m) => ({ ...m, [`${connId}:${table}`]: res.columns || [] }))
+        } catch { /* 列加载失败忽略 */ }
+      }
+      resolve()
+    })
+
+  const onTreeSelect = (keys, info) => {
+    const node = info?.node
+    if (!node) return
+    const key = node.key
+    if (typeof key === 'string' && key.startsWith('t:')) {
+      const [, connId, ...rest] = key.split(':')
+      setActiveConnId(connId)
+      openTableTab(connId, rest.join(':'))
+    } else {
+      setActiveConnId(key)
+      loadTables(key)
+    }
+  }
+
+  const refreshAll = () => {
+    refreshConnections().then((cs) => cs.forEach((c) => loadTables(c.id)))
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      {sider}
+      <Sider width={280} theme="light" style={{ borderRight: '1px solid #e2e8f0', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px', fontWeight: 700, fontSize: 15, display: 'flex', gap: 8, alignItems: 'center', borderBottom: '1px solid #f1f5f9' }}>
+          <DatabaseOutlined style={{ color: '#2563eb' }} /> uORM 管理台
+        </div>
+        <div style={{ fontSize: 12, color: '#64748b', padding: '10px 16px 4px', fontWeight: 600 }}>对象资源管理器</div>
+        <div style={{ height: 'calc(100vh - 130px)', overflow: 'auto' }}>
+          <Tree
+            showIcon
+            blockNode
+            treeData={treeData}
+            loadData={onLoadTreeData}
+            onSelect={onTreeSelect}
+          />
+        </div>
+      </Sider>
       <Layout>
-        <Header style={{ background: '#fff', display: 'flex', alignItems: 'center', gap: 8,
-          borderBottom: '1px solid #eee', padding: '0 16px', height: 56 }}>
-          <Space>
-            {[
-              { key: 'browser', icon: <TableOutlined />, label: '数据浏览' },
-              { key: 'console', icon: <ConsoleSqlOutlined />, label: 'SQL 控制台' },
-              { key: 'conn', icon: <SettingOutlined />, label: '连接管理' },
-            ].map((it) => (
-              <Button
-                key={it.key}
-                type={view === it.key ? 'primary' : 'text'}
-                icon={it.icon}
-                onClick={() => setView(it.key)}
-              >
-                {it.label}
-              </Button>
-            ))}
+        <Header style={{ background: '#0f172a', display: 'flex', alignItems: 'center', padding: '0 16px', height: 48 }}>
+          <Space size={8}>
+            <Button type="primary" size="small" icon={<PlusOutlined />}
+              disabled={!activeConnId}
+              onClick={() => openSqlTab(activeConnId)}>新建查询</Button>
+            <Button size="small" icon={<ReloadOutlined />} onClick={refreshAll} />
           </Space>
           <div style={{ flex: 1 }} />
-          <Space>
-            {active && <Tag color="blue">{active.driver} · {active.database}</Tag>}
-            <Button icon={<ReloadOutlined />} onClick={() => { refreshConnections(); refreshTables(activeConn) }} />
-            <Button icon={<LogoutOutlined />} onClick={() => { api.logout(); setAuthed(false) }} />
-          </Space>
+          <Text style={{ color: '#94a3b8', fontSize: 12, marginRight: 12 }}>
+            {connections.length} 个连接
+          </Text>
+          <Button size="small" icon={<LogoutOutlined />}
+            onClick={() => { clearToken(); setAuthed(false); setTabs([]) }} />
         </Header>
-        <Content style={{ padding: 16 }}>
-          {view === 'conn' && (
-            <Connections connections={connections} drivers={drivers} onChange={refreshConnections} />
-          )}
-          {view === 'browser' && (
-            <Browser connId={activeConn} table={activeTable} />
-          )}
-          {view === 'console' && (
-            <Console connId={activeConn} />
-          )}
-          {!activeConn && view !== 'conn' && (
-            <Card><Text type="secondary">请先在左侧选择一个连接（或在“连接管理”中添加）</Text></Card>
+        <Content style={{ padding: 12, background: '#f1f5f9' }}>
+          {tabs.length === 0 ? (
+            <EmptyHint text="从左侧对象资源管理器点击表名打开数据浏览，或点击工具栏“新建查询”打开 SQL 控制台；连接管理在左侧连接节点上右键/工具栏进入。" />
+          ) : (
+            <Tabs
+              type="editable-card"
+              hideAdd
+              activeKey={activeKey}
+              onChange={setActiveKey}
+              onEdit={(targetKey, action) => { if (action === 'remove') removeTab(targetKey) }}
+              items={tabs.map((t) => ({
+                key: t.key,
+                label: t.title,
+                closable: true,
+                children:
+                  t.type === 'table' ? <TableGrid connId={t.connId} table={t.table} /> :
+                  t.type === 'sql' ? <SqlConsole connId={t.connId} /> :
+                  t.type === 'conn' ? <Connections connections={connections} drivers={drivers} onChange={refreshConnections} /> :
+                  <EmptyHint text="在左侧展开表树进行浏览" />,
+              }))}
+            />
           )}
         </Content>
+        <Footer style={{ background: '#e2e8f0', padding: '4px 16px', fontSize: 12, color: '#475569', display: 'flex', gap: 16 }}>
+          <span>uORM v0.8.0</span>
+          {activeConn && <span>当前连接: {activeConn.name} ({activeConn.driver} · {activeConn.database})</span>}
+          <span>就绪</span>
+          <div style={{ flex: 1 }} />
+          <Button size="small" type="text" icon={<SettingOutlined />}
+            onClick={() => openConnTab()}>连接管理</Button>
+        </Footer>
       </Layout>
     </Layout>
   )
