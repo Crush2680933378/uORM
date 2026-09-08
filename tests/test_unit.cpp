@@ -149,6 +149,16 @@ TEST_CASE("未注册类型静态检测") {
     CHECK_FALSE(is_registered_v<NotRegistered>);
 }
 
+TEST_CASE("Mapper::columnNameOf：注册列/外来类成员/非数据成员") {
+    struct Foreign { std::string name; };
+
+    CHECK(Mapper<Person>::columnNameOf(&Person::name) == "name");
+    CHECK(Mapper<Person>::columnNameOf(&Person::id) == "id");
+    CHECK(Mapper<Person>::columnNameOf(&Person::age) == "age");
+    // 外来类的同名成员：编译可过，运行返回空串
+    CHECK(Mapper<Person>::columnNameOf(&Foreign::name).empty());
+}
+
 // ---------------- SqlValue ----------------
 TEST_CASE("SqlValue 转换辅助") {
     SqlValue n = nullptr;

@@ -22,6 +22,14 @@ public:
     bool supportsReturningId() const override { return false; }
     std::string getTableOptions(const std::string&) const override { return ""; }
     std::string getLastInsertIdSql() const override { return "SELECT last_insert_rowid()"; }
+
+    // SQLite 不允许 OFFSET 脱离 LIMIT；LIMIT -1 表示不限
+    std::string limitOffsetClause(int limit, int offset) const override {
+        if (limit >= 0 && offset >= 0) return " LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+        if (limit >= 0) return " LIMIT " + std::to_string(limit);
+        if (offset >= 0) return " LIMIT -1 OFFSET " + std::to_string(offset);
+        return "";
+    }
 };
 
 namespace detail {

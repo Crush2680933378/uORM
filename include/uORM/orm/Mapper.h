@@ -680,8 +680,7 @@ private:
         sql += query.getGroupBy();
         sql += query.getHaving();
         sql += query.getOrderBy();
-        sql += query.getLimit();
-        sql += query.getOffset();
+        sql += dialect->limitOffsetClause(query.limitValue(), query.offsetValue());
         return sql;
     }
 
