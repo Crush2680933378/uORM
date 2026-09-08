@@ -163,6 +163,19 @@ public:
         return *this;
     }
 
+    // ---------------- 原生片段 ----------------
+    // 直接设置 WHERE 子句；参数用 param() 按序追加
+    Query& whereRaw(const std::string& raw) {
+        whereClause_ = raw;
+        return *this;
+    }
+
+    // 追加绑定参数（与 whereRaw/having 中的 ? 按序对应）
+    Query& param(SqlValue v) {
+        params_.push_back(std::move(v));
+        return *this;
+    }
+
     Query& limit(int limit) {
         limitValue_ = limit;
         limitClause_ = " LIMIT " + std::to_string(limit);

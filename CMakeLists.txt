@@ -166,6 +166,11 @@ if(BUILD_EXAMPLES)
     add_executable(uORMPP_demo examples/bindings/cpp_full_demo.cpp)
     target_link_libraries(uORMPP_demo PRIVATE uormpp)
   endif()
+
+  # 分层架构示例（Model/DAO/Service）
+  add_executable(uORM_layered_demo examples/layered-app/main.cpp)
+  target_include_directories(uORM_layered_demo PRIVATE examples/layered-app)
+  target_link_libraries(uORM_layered_demo PRIVATE uORM::uorm)
 endif()
 
 # 协程版异步测试（C++20，opt-in，需要 asio）
