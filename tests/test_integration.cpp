@@ -120,6 +120,35 @@ void runFullSuite(DataSource& ds) {
         CHECK(Mapper<Item>::count(*conn) == 2);
     }
 
+    // replace：同主键整行替换
+    {
+        auto conn = ds.getConnection();
+        auto row = Mapper<Item>::findOne(*conn, "id = ?", id1);
+        REQUIRE(row.has_value());
+        row->price = 99.0;
+        row->stock = 77;
+        CHECK(Mapper<Item>::replace(*row, *conn));
+        auto back = Mapper<Item>::findOne(*conn, "id = ?", id1);
+        REQUIRE(back.has_value());
+        CHECK(back->price == doctest::Approx(99.0));
+        CHECK(back->stock == 77);
+        CHECK(Mapper<Item>::count(*conn) >= 2);
+    }
+
+    // updateSome：部分更新不影响其他列
+    {
+        auto conn = ds.getConnection();
+        auto row = Mapper<Item>::findOne(*conn, "id = ?", id1);
+        REQUIRE(row.has_value());
+        long long stockBefore = row->stock;
+        row->price = 55.5;
+        CHECK(Mapper<Item>::updateSome(*row, *conn, &Item::price));
+        auto back = Mapper<Item>::findOne(*conn, "id = ?", id1);
+        REQUIRE(back.has_value());
+        CHECK(back->price == doctest::Approx(55.5));
+        CHECK(back->stock == stockBefore); // stock 未被 updateSome 触碰
+    }
+
     // 事务：提交
     {
         auto before = [&] { auto c = ds.getConnection(); return Mapper<Item>::count(*c); }();

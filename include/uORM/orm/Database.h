@@ -82,6 +82,17 @@ public:
     template<typename T>
     bool saveOrUpdate(T& entity) { return withConn([&](IConnection& c) { return Mapper<T>::saveOrUpdate(entity, c); }); }
 
+    // replace 语义：冲突时整行替换（未指定列被重置为默认值）
+    template<typename T>
+    bool replace(T& entity) { return withConn([&](IConnection& c) { return Mapper<T>::replace(entity, c); }); }
+
+    // 按实体更新指定字段（成员指针），其余字段不动；WHERE 取实体主键
+    //   db.updateSome(u, &User::name, &User::age);
+    template<typename T, typename... Ms>
+    bool updateSome(T& entity, Ms... members) {
+        return withConn([&](IConnection& c) { return Mapper<T>::updateSome(entity, c, members...); });
+    }
+
     template<typename T>
     bool update(const T& entity) { return withConn([&](IConnection& c) { return Mapper<T>::update(entity, c); }); }
 
@@ -138,6 +149,25 @@ public:
         return ds_.execute(sql, params);
     }
 
+    // ---------------- 异步（共享线程池，异常经 future 传播） ----------------
+    std::future<QueryResult> queryAsync(const std::string& sql, const std::vector<SqlValue>& params = {}) {
+        return ds_.queryAsync(sql, params);
+    }
+
+    std::future<unsigned long long> executeAsync(const std::string& sql, const std::vector<SqlValue>& params = {}) {
+        return ds_.executeAsync(sql, params);
+    }
+
+    template<typename T>
+    std::future<std::vector<T>> selectAsync(const Query& query) {
+        return ds_.async([this, query] { return Mapper<T>::select(*this->sourcePtr(), query); });
+    }
+
+    template<typename T>
+    std::future<long long> countAsync(const Query& query = Query()) {
+        return ds_.async([this, query] { return Mapper<T>::count(*this->sourcePtr(), query); });
+    }
+
     // ---------------- 类型安全查询（推荐） ----------------
     // 成员指针指定列，编译期防拼错：
     //   auto rows = db.query<User>()
@@ -162,6 +192,8 @@ public:
     DataSource& source() { return ds_; }
 
 private:
+    DataSource* sourcePtr() { return &ds_; }
+
     template<typename F>
     auto withConn(F&& fn) -> decltype(fn(std::declval<IConnection&>())) {
         auto conn = ds_.getConnection();

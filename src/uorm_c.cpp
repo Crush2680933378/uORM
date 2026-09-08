@@ -3,8 +3,6 @@
 // 把 header-only 的 C++ 内核编译进动态库，对外只导出 uorm_c.h 中的稳定 C 符号。
 // 所有 C++ 异常在此边界转换为错误码 + 线程局部错误消息。
 
-#define UORM_C_BUILDING
-
 #include "uORM/abi/uorm_c.h"
 
 #include "uORM/orm/ORM.h"
