@@ -13,6 +13,9 @@ uORM 是一个现代化的、轻量级的 C++17 ORM 与 **Web 数据库管理台
 - **复合主键**：`UORM_COMPOSITE_PK(T, "colA", "colB")` 表级约束，update/remove/saveOrUpdate 全链路感知。
 - **外键**：字段约束写 `REFERENCES parent(id)` 即可（MySQL 的内联 REFERENCES 会被自动转成表级 FOREIGN KEY——MySQL 解析器接受但忽略内联写法的陷阱已处理）。
 - **轻量迁移**：`db.syncTable<T>()` 缺表建表、缺列自动补列（剥离不安全约束）、补建索引；另有 `addColumn`/`dropColumn`/`renameColumn`/`renameTable`/`tableExists`/`existingColumns`。
+- **replace 语义**：`db.replace(e)` 冲突时整行替换——MySQL `REPLACE INTO`、SQLite `INSERT OR REPLACE`、PG `ON CONFLICT (pk) DO UPDATE` 全列，方言各自最优路径。
+- **updateSome**：`db.updateSome(e, &User::name, &User::age)` 按实体只更新指定字段，其余列不动。
+- **异步 API**：`db.queryAsync(sql, params)` / `executeAsync` / `selectAsync<T>` / `countAsync<T>` 返回 `std::future`，共享线程池执行，异常经 future 传播；连接池线程安全。
 - **类型安全查询**：`db.query<User>().where(&User::age, uORM::GT, 18).orderByDesc(&User::id).all()`——成员指针当列名，写错字段编译不过；同一组条件可直接 `.set(...).update()` / `.remove()`（无 WHERE 拒绝执行，防全表误操作）。
 - **RAII 事务作用域**：`auto tx = db.txBegin(); ...; tx->commit();`——忘提交/抛异常析构自动回滚，连接自动归还；也支持 `db.tx(lambda)`。
 - **批量插入**：`db.saveRange(items)` 单条多行 VALUES、按驱动参数上限分块、自增 id 三库各自正确写回。

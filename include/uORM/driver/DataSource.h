@@ -10,6 +10,7 @@
 #include "uORM/driver/DriverRegistry.h"
 #include "uORM/orm/Error.h"
 #include "uORM/orm/QueryResult.h"
+#include "uORM/async/ThreadPool.h"
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -127,6 +128,22 @@ public:
     unsigned long long execute(const std::string& sql, const std::vector<SqlValue>& params = {}) {
         auto conn = getConnection();
         return executeUpdate(*conn, sql, params);
+    }
+
+    // ---------------- 异步 API ----------------
+    // 在共享线程池上执行（连接池本身线程安全），异常经 std::future 传播。
+    // 注意：持有引用/指针的任务（如实体写回）请自行保证对象生命周期。
+    template<typename F>
+    auto async(F&& f) -> std::future<std::invoke_result_t<F>> {
+        return ThreadPool::instance().submit(std::forward<F>(f));
+    }
+
+    std::future<QueryResult> queryAsync(const std::string& sql, const std::vector<SqlValue>& params = {}) {
+        return async([this, sql, params] { return query(sql, params); });
+    }
+
+    std::future<unsigned long long> executeAsync(const std::string& sql, const std::vector<SqlValue>& params = {}) {
+        return async([this, sql, params] { return execute(sql, params); });
     }
 
     std::shared_ptr<ISqlDialect> dialect() {

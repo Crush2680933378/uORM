@@ -659,6 +659,181 @@ public:
         return true;
     }
 
+    // ---------------- replace 语义 ----------------
+    // 与 saveOrUpdate 不同：冲突时整行替换（未指定列被重置为默认值），而非部分更新。
+    // MySQL: REPLACE INTO；SQLite: INSERT OR REPLACE；PG: ON CONFLICT (pk) DO UPDATE 全列。
+    // 无主键 / 自增主键仍为默认值时退化为普通 insert。
+    static bool replace(T& entity, IConnection& conn) {
+        auto dialect = conn.dialect();
+        auto fields = TableMeta<T>::get_fields();
+
+        // 主键列（含复合主键）与是否全部有值
+        std::vector<std::string> pkCols;
+        bool pkAllSet = true;
+        std::apply([&](auto&&... field) {
+            ((  (isPkField(field) ? (
+                    pkCols.emplace_back(field.column_name),
+                    pkAllSet = pkAllSet && !primaryKeyHasDefault(entity.*(field.member_ptr)), 0)
+                : 0) ), ...);
+        }, fields);
+        const bool useConflict = !pkCols.empty() && pkAllSet;
+
+        std::string returningCol;
+        if (dialect->supportsReturningId()) returningCol = findAutoIncrementColumn(fields);
+
+        // 列集：主键列必须参与（产生冲突才形成"替换"）；
+        // 自增主键值为默认时不参与（退化为普通插入）；空串+默认值跳过
+        auto includeCol = [&entity](auto&& field) {
+            if (isPkField(field)) {
+                if (isAutoIncrement(field.constraint_sql))
+                    return !primaryKeyHasDefault(entity.*(field.member_ptr));
+                return true;
+            }
+            using FieldType = typename std::decay_t<decltype(field)>::Type;
+            if constexpr (std::is_same_v<FieldType, std::string>) {
+                if ((entity.*(field.member_ptr)).empty() &&
+                    std::string(field.constraint_sql).find("DEFAULT") != std::string::npos) return false;
+            }
+            return true;
+        };
+
+        std::stringstream cols;
+        cols << " (";
+        bool first = true;
+        std::apply([&](auto&&... field) {
+            ((  (includeCol(field) ? (
+                    cols << (first ? "" : ", ") << dialect->quoteIdentifier(field.column_name),
+                    first = false
+                ) : 0) ), ...);
+        }, fields);
+        cols << ") VALUES (";
+        first = true;
+        std::apply([&](auto&&... field) {
+            ((  (includeCol(field) ? (
+                    cols << (first ? "" : ", ") << "?",
+                    first = false
+                ) : 0) ), ...);
+        }, fields);
+        cols << ")";
+        std::string colsSql = cols.str();
+
+        std::string prefix;
+        switch (dialect->kind()) {
+            case DialectKind::MySQL:  prefix = "REPLACE INTO "; break;
+            case DialectKind::SQLite: prefix = "INSERT OR REPLACE INTO "; break;
+            case DialectKind::PostgreSQL:
+            default:                  prefix = "INSERT INTO "; break;
+        }
+        std::string sql = prefix + dialect->quoteIdentifier(TableMeta<T>::name) + colsSql;
+
+        if (dialect->kind() == DialectKind::PostgreSQL && useConflict) {
+            sql += " ON CONFLICT (";
+            for (std::size_t i = 0; i < pkCols.size(); ++i) {
+                if (i) sql += ", ";
+                sql += dialect->quoteIdentifier(pkCols[i]);
+            }
+            sql += ") DO UPDATE SET ";
+            first = true;
+            std::apply([&](auto&&... field) {
+                ((  (isPkField(field) || isAutoIncrement(field.constraint_sql) ? 0
+                    : [&]() -> int {
+                          if (!first) sql += ", ";
+                          sql += dialect->quoteIdentifier(field.column_name) +
+                                 "=EXCLUDED." + dialect->quoteIdentifier(field.column_name);
+                          first = false;
+                          return 0;
+                      }()) ), ...);
+            }, fields);
+        }
+
+        if (!returningCol.empty()) {
+            sql += " RETURNING " + dialect->quoteIdentifier(returningCol);
+        }
+
+        try {
+            auto pstmt = conn.prepareStatement(sql);
+            int index = 1;
+            std::apply([&](auto&&... field) {
+                ((  (includeCol(field) ? (
+                        uORM::bindValue(pstmt.get(), index++, entity.*(field.member_ptr)), 0
+                    ) : 0) ), ...);
+            }, fields);
+
+            if (!returningCol.empty()) {
+                auto res = pstmt->executeQuery();
+                if (res->next()) writeBackAutoIncrement(fields, entity, res->getSqlValue(0));
+            } else {
+                pstmt->executeUpdate();
+                long long newId = conn.lastInsertId();
+                if (newId > 0) writeBackAutoIncrement(fields, entity, newId);
+            }
+            return true;
+        } catch (const uORM::Exception&) {
+            throw;
+        } catch (const std::exception& e) {
+            throw SqlError(std::string("replace失败: ") + e.what());
+        }
+    }
+
+    static bool replace(T& entity) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return replace(entity, *conn);
+    }
+
+    // ---------------- updateSome：按实体更新指定字段 ----------------
+    // 其余字段不受影响；WHERE 取实体主键（含复合主键）
+    template<typename... Ms>
+    static bool updateSome(T& entity, IConnection& conn, Ms... members) {
+        static_assert(sizeof...(Ms) >= 1, "updateSome: 至少指定一个要更新的成员");
+        auto dialect = conn.dialect();
+
+        std::string setSql;
+        bool first = true;
+        std::vector<SqlValue> setVals;
+        auto addSet = [&](auto member) {
+            auto col = columnNameOf(member);
+            if (col.empty()) throw OrmError("updateSome: 该成员未在 UORM 映射中注册");
+            if (!first) setSql += ", ";
+            setSql += dialect->quoteIdentifier(col) + " = ?";
+            setVals.push_back(SqlValue(entity.*member));
+            first = false;
+        };
+        (addSet(members), ...);
+
+        std::string whereSql;
+        std::vector<SqlValue> whereVals;
+        first = true;
+        auto fields = TableMeta<T>::get_fields();
+        std::apply([&](auto&&... field) {
+            ((  (isPkField(field) ? (
+                    whereSql += (first ? "" : " AND ") + dialect->quoteIdentifier(field.column_name) + " = ?",
+                    whereVals.push_back(SqlValue(entity.*(field.member_ptr))),
+                    first = false, 0
+                ) : 0) ), ...);
+        }, fields);
+        if (whereSql.empty()) throw OrmError("updateSome: 实体没有主键，无法定位更新");
+
+        try {
+            auto pstmt = conn.prepareStatement("UPDATE " + dialect->quoteIdentifier(TableMeta<T>::name) +
+                                               " SET " + setSql + " WHERE " + whereSql);
+            int index = 1;
+            for (const auto& v : setVals)   uORM::bindSqlValue(pstmt.get(), index++, v);
+            for (const auto& v : whereVals) uORM::bindSqlValue(pstmt.get(), index++, v);
+            pstmt->executeUpdate();
+            return true;
+        } catch (const uORM::Exception&) {
+            throw;
+        } catch (const std::exception& e) {
+            throw SqlError(std::string("部分更新失败: ") + e.what());
+        }
+    }
+
+    template<typename... Ms>
+    static bool updateSome(T& entity, Ms... members) {
+        auto conn = ConnectionPool::instance().getConnection();
+        return updateSome(entity, *conn, members...);
+    }
+
 private:
     // 构建 SELECT 语句（投影/去重/连接/分组/聚合全量支持）
     static std::string buildSelectSql(const std::shared_ptr<ISqlDialect>& dialect, const Query& query) {
