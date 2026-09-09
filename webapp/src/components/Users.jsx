@@ -1,3 +1,6 @@
+// 文件说明：
+// Users —— 用户管理页（仅超级管理员）：列表/新增/删除/重置密码。
+
 // 用户管理（仅超级管理员可见）：列表 / 新增 / 删除 / 改角色 / 重置密码
 import React, { useState } from 'react'
 import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'

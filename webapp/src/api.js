@@ -1,3 +1,6 @@
+// 文件说明：
+// api —— 后端 REST 接口的统一封装（fetch + 令牌头 + 401 自动登出）。
+
 const TOKEN_KEY = 'uorm_token'
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || ''

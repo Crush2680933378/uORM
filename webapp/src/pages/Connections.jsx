@@ -1,3 +1,6 @@
+// 文件说明：
+// Connections —— 连接管理页：新增/删除/测试连接（密码不回显）。
+
 import React, { useState } from 'react'
 import { Button, Card, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Switch, Table } from 'antd'
 import { ApiOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'

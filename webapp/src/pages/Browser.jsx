@@ -1,3 +1,6 @@
+// 文件说明：
+// Browser —— 数据浏览标签页：分页表格/列头排序/表结构抽屉/NULL 渲染。
+
 import React, { useEffect, useState } from 'react'
 import { Button, Card, Descriptions, Drawer, message, Space, Table, Typography } from 'antd'
 import { ColumnWidthOutlined } from '@ant-design/icons'

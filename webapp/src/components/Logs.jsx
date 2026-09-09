@@ -1,3 +1,6 @@
+// 文件说明：
+// Logs —— 操作日志页（管理员及以上）：按用户/动作/状态过滤的审计日志表格。
+
 // 操作日志（管理员及以上）：过滤查询 + 表格展示
 import React, { useEffect, useState } from 'react'
 import { Button, Card, Input, Select, Space, Table, Tag, Tooltip } from 'antd'

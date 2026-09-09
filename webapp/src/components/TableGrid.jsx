@@ -1,3 +1,7 @@
+// 文件说明：
+// TableGrid —— 数据网格标签页：分页浏览/排序/双击行内编辑/新增行/删除行/
+//              CSV 导出/表结构抽屉（Navicat 风格）。
+
 // 数据网格（Navicat 风格）：双击单元格行内编辑 / 新增行 / 删除行 / 排序 / 分页 /
 // CSV 导出 / NULL 与空串区分 / 表结构抽屉（含建表 DDL）
 import React, { useEffect, useState } from 'react'

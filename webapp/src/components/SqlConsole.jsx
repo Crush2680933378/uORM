@@ -1,3 +1,6 @@
+// 文件说明：
+// SqlConsole —— SQL 控制台标签页：编辑执行/历史记录/耗时/错误与结果面板。
+
 // SQL 控制台标签页：编辑执行 / 历史 / 耗时 / 错误与结果面板
 import React, { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Card, message, Space, Table, Tag, Typography } from 'antd'

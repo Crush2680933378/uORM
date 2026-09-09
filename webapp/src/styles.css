@@ -1,26 +1,199 @@
-body {
+/* =====================================================================
+   uORM 管理台全局样式（Navicat / 专业数据库工具质感）
+   配色：深蓝黑侧栏 + 浅灰主区 + 蓝色主色
+   ===================================================================== */
+
+:root {
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --sidebar-bg: #0f172a;
+  --sidebar-hover: #1e293b;
+  --sidebar-active: #17325c;
+  --sidebar-text: #cbd5e1;
+  --content-bg: #f1f5f9;
+  --card-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+html, body, #root {
+  height: 100%;
   margin: 0;
-  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  background: #f5f6fa;
 }
 
-.result-table .ant-table-cell {
-  font-family: 'JetBrains Mono', Consolas, monospace;
+body {
+  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  background: var(--content-bg);
+  color: #1e293b;
+}
+
+/* ---- 滚动条（Webkit 内核） ---- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #c3cbd9;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+
+/* ---- 深色侧栏 ---- */
+.app-sider {
+  background: linear-gradient(180deg, var(--sidebar-bg) 0%, #111c33 100%) !important;
+}
+.app-sider .ant-layout-sider-children { display: flex; flex-direction: column; }
+.app-sider .explore-header {
+  color: #e2e8f0;
+  font-weight: 600;
+  padding: 14px 16px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+.app-sider .explore-group {
+  color: #7c8db5;
   font-size: 12px;
+  padding: 10px 16px 4px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.app-sider .ant-tree {
+  background: transparent;
+  color: var(--sidebar-text);
+  flex: 1;
+  overflow: auto;
+}
+.app-sider .ant-tree-node-content-wrapper:hover {
+  background: var(--sidebar-hover);
+}
+.app-sider .ant-tree-node-selected {
+  background: var(--sidebar-active) !important;
+  color: #fff;
+}
+.app-sider .ant-tree-node-content-wrapper {
+  color: var(--sidebar-text);
+}
+.app-sider .ant-tree-switcher { color: #64748b; }
+
+/* ---- 顶部工具栏 ---- */
+.app-header {
+  background: #fff !important;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0 16px !important;
+  height: 52px !important;
+  line-height: normal !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  position: relative;
+  z-index: 10;
 }
 
+/* ---- 卡片 ---- */
+.ant-card {
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+  border: 1px solid #eef1f6;
+}
+.ant-card-head {
+  border-bottom: 1px solid #eef1f6;
+  min-height: 44px;
+}
+.ant-card-head-title { font-weight: 600; }
+
+/* ---- 数据表格（结果/数据网格） ---- */
+.result-table .ant-table {
+  font-size: 13px;
+}
+.result-table .ant-table-thead > tr > th {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+  border-bottom: 2px solid #e2e8f0;
+  white-space: nowrap;
+}
+.result-table .ant-table-tbody > tr:hover > td {
+  background: #eff6ff;
+}
+.result-table .ant-table-cell {
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+}
+.result-table td.max-cell { max-width: 320px; }
+
+/* ---- SQL 编辑器 ---- */
 .sql-editor {
   width: 100%;
-  min-height: 140px;
-  font-family: Consolas, monospace;
+  min-height: 160px;
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
   font-size: 13px;
-  padding: 10px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
+  line-height: 1.6;
+  padding: 12px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
   resize: vertical;
+  background: #fbfdff;
+  color: #0f172a;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  tab-size: 4;
 }
-
 .sql-editor:focus {
   outline: none;
-  border-color: #2563eb;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  background: #fff;
 }
+
+/* ---- 登录页 ---- */
+.login-page {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at top left, rgba(37, 99, 235, 0.14), transparent 55%),
+    radial-gradient(ellipse at bottom right, rgba(29, 78, 216, 0.10), transparent 55%),
+    linear-gradient(160deg, #f8fafc 0%, #e8eef7 100%);
+}
+.login-card {
+  width: 400px;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.12);
+}
+.login-title {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.login-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 4px;
+  font-size: 34px;
+  color: var(--primary);
+}
+.login-hint {
+  text-align: center;
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+/* ---- 状态栏 ---- */
+.status-bar {
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  padding: 3px 16px;
+  font-size: 12px;
+  color: #64748b;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+/* ---- 对象资源管理器小图标着色 ---- */
+.tree-conn-icon { color: #f59e0b; }
+.tree-table-icon { color: #64748b; }

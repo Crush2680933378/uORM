@@ -1,3 +1,8 @@
+// 文件说明：
+// App —— 应用主骨架：登录门卫、对象资源管理器（连接/表/列树）、多标签工作区、状态栏。
+// 角色权限（与 webconsole 服务端一致，前端只做显隐，服务端强制校验）：
+//   superadmin（超级管理员）/ admin（管理员）/ user（普通用户，只读）
+
 import React, { useEffect, useState } from 'react'
 import { Button, Card, Form, Input, Layout, message, Space, Tabs, Tag, Tree, Typography } from 'antd'
 import {
@@ -84,19 +89,22 @@ export default function App() {
 
   if (!authed) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f1f5f9' }}>
-        <Card title="uORM 数据库管理台" style={{ width: 380 }}>
+      <div className="login-page">
+        <Card className="login-card">
+          <div className="login-logo"><DatabaseOutlined /></div>
+          <div className="login-title">uORM 数据库管理台</div>
           <Form onFinish={async ({ username, password }) => {
             try { await api.login(username, password); setAuthed(true) } catch (e) { message.error(e.message) }
           }}>
             <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-              <Input placeholder="用户名" autoFocus />
+              <Input placeholder="用户名" autoFocus prefix={<UserOutlined />} />
             </Form.Item>
             <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
               <Input.Password placeholder="密码" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block>登 录</Button>
           </Form>
+          <div className="login-hint">账号由管理员分配 · 忘记密码请联系管理员重置</div>
         </Card>
       </div>
     )
@@ -207,11 +215,11 @@ export default function App() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={280} theme="light" style={{ borderRight: '1px solid #e2e8f0', overflow: 'hidden' }}>
-        <div style={{ padding: '14px 16px', fontWeight: 700, fontSize: 15, display: 'flex', gap: 8, alignItems: 'center', borderBottom: '1px solid #f1f5f9' }}>
-          <DatabaseOutlined style={{ color: '#2563eb' }} /> uORM 管理台
+      <Sider width={280} theme="dark" className="app-sider" style={{ overflow: 'hidden' }}>
+        <div className="explore-header">
+          <DatabaseOutlined style={{ color: '#60a5fa' }} /> uORM 管理台
         </div>
-        <div style={{ fontSize: 12, color: '#64748b', padding: '10px 16px 4px', fontWeight: 600 }}>对象资源管理器</div>
+        <div className="explore-group">连接</div>
         <div style={{ height: 'calc(100vh - 130px)', overflow: 'auto' }}>
           <Tree
             showIcon
@@ -223,7 +231,7 @@ export default function App() {
         </div>
       </Sider>
       <Layout>
-        <Header style={{ background: '#0f172a', display: 'flex', alignItems: 'center', padding: '0 16px', height: 48 }}>
+        <Header className="app-header">
           <Space size={8}>
             <Button type="primary" size="small" icon={<PlusOutlined />}
               disabled={!activeConnId}
@@ -274,7 +282,7 @@ export default function App() {
             />
           )}
         </Content>
-        <Footer style={{ background: '#e2e8f0', padding: '4px 16px', fontSize: 12, color: '#475569', display: 'flex', gap: 16 }}>
+        <Footer className="status-bar" style={{ padding: '4px 16px' }}>
           <span>uORM v0.8.0</span>
           {activeConn && <span>当前连接: {activeConn.name} ({activeConn.driver} · {activeConn.database})</span>}
           <span>就绪</span>
