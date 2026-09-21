@@ -25,8 +25,7 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     /* 版本与驱动 */
-    fprintf(stderr, "[stage] [stage] version
-");
+    fprintf(stderr, "[stage] version\n");
     OK(uorm_version() != NULL && uorm_version()[0] == '0', "version string");
     OK(uorm_driver_count() >= 1, "at least one driver");
 
@@ -58,8 +57,7 @@ int main(void) {
     opt.pool_size = 2;
     opt.acquire_timeout_ms = 2000;
     uorm_data_source* ds = uorm_ds_create(&opt);
-    fprintf(stderr, "[stage] [stage] ds created
-");
+    fprintf(stderr, "[stage] ds created\n");
     OK(ds != NULL, "sqlite data source");
     if (!ds) return 1;
 
@@ -103,8 +101,7 @@ int main(void) {
 
     /* 事务：提交 */
     uorm_connection* conn = NULL;
-    fprintf(stderr, "[stage] [stage] acquired
-");
+    fprintf(stderr, "[stage] acquired\n");
     OK(uorm_ds_acquire(ds, &conn) == UORM_OK && conn != NULL, "acquire");
     OK(uorm_conn_ping(conn) != 0, "ping");
     OK(uorm_conn_begin(conn) == UORM_OK, "begin");
