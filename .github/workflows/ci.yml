@@ -57,11 +57,10 @@ jobs:
       - name: C ABI tests
         run: ./build/uorm_test_c_abi
 
-      - name: C ABI tests (gdb backtrace on crash)
+      - name: C ABI crash backtrace (gdb)
+        if: always()
         run: |
-          if ! ./build/uorm_test_c_abi; then
-            gdb -batch -ex run -ex bt --args ./build/uorm_test_c_abi || true
-          fi
+          gdb -batch -ex run -ex bt --args ./build/uorm_test_c_abi || true
 
       - name: Integration tests (SQLite + MySQL + PostgreSQL)
         run: |
