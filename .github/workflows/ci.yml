@@ -40,10 +40,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libmariadb-dev libpq-dev libsqlite3-dev libasio-dev doctest-dev
+          sudo apt-get install -y ninja-build libmariadb-dev libpq-dev libsqlite3-dev libasio-dev doctest-dev g++-14
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUORM_BUILD_TESTS=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUORM_BUILD_TESTS=ON -DCMAKE_CXX_COMPILER=g++-14
 
       - name: Build
         run: cmake --build build
@@ -99,7 +99,7 @@ jobs:
             mingw-w64-x86_64-doctest
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUORM_BUILD_TESTS=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUORM_BUILD_TESTS=ON -DCMAKE_CXX_COMPILER=g++-14
 
       - name: Build
         run: cmake --build build
