@@ -57,6 +57,10 @@ jobs:
       - name: C ABI tests
         run: ./build/uorm_test_c_abi
 
+      - name: C ABI tests (ASLR disabled fallback)
+        if: failure()
+        run: setarch $(uname -m) -R ./build/uorm_test_c_abi
+
       - name: C ABI crash backtrace (gdb)
         if: always()
         run: |
