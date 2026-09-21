@@ -99,7 +99,7 @@ jobs:
             mingw-w64-x86_64-doctest
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUORM_BUILD_TESTS=ON -DCMAKE_CXX_COMPILER=g++-14
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUORM_BUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build
