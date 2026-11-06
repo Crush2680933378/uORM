@@ -52,7 +52,7 @@ public:
     // ---------------- 条件 ----------------
     template<typename M, typename V>
     TypedQuery& where(M member, Op op, V&& value) {
-        appendCond(member, op, SqlValue(std::forward<V>(value)));
+        appendCond(member, op, toSqlValue(std::forward<V>(value)));
         return *this;
     }
 
@@ -82,7 +82,7 @@ public:
 
     template<typename M, typename V>
     TypedQuery& between(M member, V&& lo, V&& hi) {
-        q_.between(quoted(member), SqlValue(std::forward<V>(lo)), SqlValue(std::forward<V>(hi)));
+        q_.between(quoted(member), toSqlValue(std::forward<V>(lo)), toSqlValue(std::forward<V>(hi)));
         return *this;
     }
 
@@ -116,7 +116,7 @@ public:
     // ---------------- UPDATE 的 SET 子句 ----------------
     template<typename M, typename V>
     TypedQuery& set(M member, V&& value) {
-        sets_.emplace_back(quoted(member), SqlValue(std::forward<V>(value)));
+        sets_.emplace_back(quoted(member), toSqlValue(std::forward<V>(value)));
         return *this;
     }
 

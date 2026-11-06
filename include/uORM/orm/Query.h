@@ -86,7 +86,7 @@ public:
         whereClause_ += col + " IN (";
         for (size_t i = 0; i < values.size(); ++i) {
             whereClause_ += (i == 0 ? "?" : ", ?");
-            params_.push_back(values[i]);
+            params_.push_back(toSqlValue(values[i]));
         }
         whereClause_ += ")";
         return *this;
@@ -102,7 +102,7 @@ public:
         whereClause_ += col + " NOT IN (";
         for (size_t i = 0; i < values.size(); ++i) {
             whereClause_ += (i == 0 ? "?" : ", ?");
-            params_.push_back(values[i]);
+            params_.push_back(toSqlValue(values[i]));
         }
         whereClause_ += ")";
         return *this;

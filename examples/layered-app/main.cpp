@@ -7,8 +7,10 @@
 //   models/           实体定义：纯数据 + UORM 映射宏
 //
 // 运行前无需任何配置文件（示例使用 SQLite 文件库）。
+#include <cstdio>
 #include <iostream>
 
+#include "../console_utf8.h"
 #include "dao/OrderDao.hpp"   // 含 OrderDao 与 ProductDao
 #include "dao/UserDao.hpp"
 #include "models/User.hpp"
@@ -17,7 +19,12 @@
 using namespace demo;
 
 int main() {
+    // Windows 控制台切到 UTF-8，保证中文输出不乱码
+    demo_console_utf8();
+
     // ---- 组装层：一个 DataSource 贯穿所有层（可注入/可替换实现）----
+    // 删除上次运行的库文件：username 唯一约束下重复运行会报“用户名已存在”
+    std::remove("layered_demo.db");
     uORM::DataSourceConfig cfg;
     cfg.params.driver = "sqlite";
     cfg.params.database = "layered_demo.db";

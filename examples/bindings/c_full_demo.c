@@ -4,6 +4,7 @@
  * 编译后与 uorm_c 动态库及其驱动依赖一起运行。
  */
 #include <uORM/abi/uorm_c.h>
+#include "../console_utf8.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +39,9 @@ static void run_query_demo(uorm_data_source* ds) {
 }
 
 int main(void) {
+    /* Windows 控制台切到 UTF-8，保证中文输出不乱码 */
+    demo_console_utf8();
+
     printf("uORM C ABI 版本: %s\n", uorm_version());
 
     char name[32];
@@ -46,7 +50,9 @@ int main(void) {
             printf("  可用驱动: %s\n", name);
     }
 
-    /* 1. 创建 SQLite 数据源（池大小 1，避免 :memory: 多库问题用文件库） */
+    /* 1. 创建 SQLite 数据源（池大小 1，避免 :memory: 多库问题用文件库）。
+       删除上次运行的库文件，保证演示可重复执行、行数不累积。 */
+    remove("uorm_c_demo.db");
     uorm_ds_options opt;
     memset(&opt, 0, sizeof(opt));
     opt.driver = "sqlite";

@@ -1,4 +1,5 @@
 #include "uORM/orm/ORM.h"
+#include "console_utf8.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -109,8 +110,8 @@ void demonstrateQueryBuilder() {
     {
         std::cout << "\n[Query 2] 查找库存 < 30 的在售产品:" << std::endl;
         uORM::Query query;
-        query.lt("stock", 30)
-             .eq("is_active", true);
+        query.lt("stock", 30LL)   // GCC 8: int 到 SqlValue 需显式 long long，避免 variant 二义
+             .eq("is_active", 1LL);
 
         auto products = uORM::Mapper<Product>::select(query);
         for (const auto& p : products) {
@@ -262,8 +263,9 @@ void demonstrateAdvancedQuery() {
     std::cout << "\n=== 演示高级查询 ===" << std::endl;
     auto& ds = uORM::ConnectionPool::instance().source();
 
-    // UORM_REFLECTION 宏实体
+    // UORM_REFLECTION 宏实体（清空旧数据，保证重复运行输出一致）
     uORM::Schema::createTable<Tag>();
+    uORM::Mapper<Tag>::truncate();
     Tag t{0, "urgent"};
     uORM::Mapper<Tag>::save(t);
     std::cout << "[REFLECTION宏] Tag 保存成功 id=" << t.id << std::endl;
@@ -273,7 +275,7 @@ void demonstrateAdvancedQuery() {
         uORM::Query q;
         q.selectRaw("category, COUNT(*) AS cnt, AVG(price) AS avg_price")
          .groupBy("category")
-         .having("COUNT(*) >= ?").havingParam(uORM::SqlValue{1})
+         .having("COUNT(*) >= ?").havingParam(uORM::SqlValue{1LL})
          .orderBy("cnt", false);
         auto result = uORM::Mapper<Product>::selectDynamic(q);
         std::cout << "[分组聚合] 分类 | 数量 | 均价" << std::endl;
@@ -287,8 +289,8 @@ void demonstrateAdvancedQuery() {
     // 括号分组: (stock < 30) AND (is_active = 1 AND (price > 50 OR name LIKE '%Pro%'))
     {
         uORM::Query q;
-        q.lt("stock", 1000)
-         .beginGroup().gt("price", 50).or_().like("name", "%Pro%").endGroup();
+        q.lt("stock", 1000LL)
+         .beginGroup().gt("price", 50.0).or_().like("name", "%Pro%").endGroup();
         auto rows = uORM::Mapper<Product>::select(q);
         std::cout << "[括号分组] 命中 " << rows.size() << " 条: ";
         for (const auto& p : rows) std::cout << p.name << " ";
@@ -375,6 +377,9 @@ void demonstrateDatabaseFacade() {
 }
 
 int main() {
+    // 0. Windows 控制台切到 UTF-8，保证中文输出不乱码
+    demo_console_utf8();
+
     // 1. 读取配置
     try {
         uORM::ConfigManager::getInstance().readDataBaseconfig("config.json");

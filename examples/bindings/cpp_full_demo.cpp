@@ -3,11 +3,19 @@
 // 演示：打开数据库、建表、参数化插入、查询取值（含 NULL）、更新、删除、
 //       事务（提交/回滚）、索引存在性、错误处理、池状态。
 #include <uormpp/UormPP.h>
+#include "../console_utf8.h"
 
+#include <cstdio>
 #include <iostream>
 
 int main() {
     using namespace uormpp;
+
+    // Windows 控制台切到 UTF-8，保证中文输出不乱码
+    demo_console_utf8();
+
+    // 删除上次运行的库文件：users.name 有唯一索引，重复运行会 UNIQUE 冲突
+    std::remove("uormpp_demo.db");
 
     std::cout << "uormpp 版本: " << version() << "\n";
     for (const auto& d : availableDrivers()) std::cout << "  驱动: " << d << "\n";

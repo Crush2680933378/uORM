@@ -95,9 +95,16 @@ if(UNIX)
     target_link_libraries(uorm INTERFACE Threads::Threads)
 endif()
 
+# MinGW（posix 线程模型）：std::thread / std::condition_variable 需要显式链接 winpthread，
+# 部分 GCC 8 发行版的驱动不会自动带入（pthread_cond_timedwait64 未定义即此症状）
+if(MINGW)
+    target_link_libraries(uorm INTERFACE winpthread)
+endif()
+
 # GCC 8.x：std::filesystem 需要显式链接 stdc++fs
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
-    foreach(t uorm uormpp uorm_c)
+    target_link_libraries(uorm INTERFACE stdc++fs)
+    foreach(t uormpp uorm_c)
         if(TARGET ${t})
             target_link_libraries(${t} PRIVATE stdc++fs)
         endif()

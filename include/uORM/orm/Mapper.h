@@ -795,7 +795,7 @@ public:
             if (col.empty()) throw OrmError("updateSome: 该成员未在 UORM 映射中注册");
             if (!first) setSql += ", ";
             setSql += dialect->quoteIdentifier(col) + " = ?";
-            setVals.push_back(SqlValue(entity.*member));
+            setVals.push_back(toSqlValue(entity.*member));
             first = false;
         };
         (addSet(members), ...);
@@ -807,7 +807,7 @@ public:
         std::apply([&](auto&&... field) {
             ((  (isPkField(field) ? (
                     whereSql += (first ? "" : " AND ") + dialect->quoteIdentifier(field.column_name) + " = ?",
-                    whereVals.push_back(SqlValue(entity.*(field.member_ptr))),
+                    whereVals.push_back(toSqlValue(entity.*(field.member_ptr))),
                     first = false, 0
                 ) : 0) ), ...);
         }, fields);
