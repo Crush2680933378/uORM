@@ -10,12 +10,17 @@
 #include <uJSON/ujson.h>
 
 #include <chrono>
+#include <cstdio>
 #include <ctime>
-#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
+
+// 注意：本文件刻意不使用 <filesystem>。
+// MinGW-w64 GCC 8.1.0 的 libstdc++ 中 bits/fs_path.h 有缺陷（operator/= 内引用了
+// 尚未声明的 operator!=），仅 #include <filesystem> 就会编译失败，GCC 8.2 才修复。
+// 这里需要的“取文件大小 / 重命名”用 iostream + cstdio 实现即可，无需该头。
 
 namespace uORM {
 namespace web {
@@ -106,15 +111,18 @@ public:
 
 private:
     bool fileSizeExceeds() const {
-        std::error_code ec;
-        auto size = std::filesystem::file_size(path_, ec);
-        return !ec && size > rotateBytes_;
+        std::ifstream f(path_, std::ios::binary | std::ios::ate);
+        if (!f.is_open()) return false;
+        std::streamoff size = static_cast<std::streamoff>(f.tellg());
+        if (size < 0) return false;
+        return static_cast<std::size_t>(size) > rotateBytes_;
     }
 
     void rotateIfPossible() {
-        std::error_code ec;
         std::string rotated = path_ + ".1";
-        std::filesystem::rename(path_, rotated, ec);
+        // Windows 下 rename 不会覆盖已存在的目标文件，先删除旧轮转文件
+        std::remove(rotated.c_str());
+        std::rename(path_.c_str(), rotated.c_str());
         entryCount_ = 0;
     }
 

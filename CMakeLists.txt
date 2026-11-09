@@ -116,6 +116,9 @@ if(UORM_ENABLE_WEB)
     add_library(uorm_web INTERFACE)
     add_library(uORM::web ALIAS uorm_web)
     target_link_libraries(uorm_web INTERFACE uORM::uorm)
+    # asio 是 header-only：头目录必须传给所有使用 uORM::web 的目标，
+    # 否则 asio 不在编译器默认搜索路径时，web 示例/控制台会报找不到 asio.hpp
+    target_include_directories(uorm_web INTERFACE ${UORM_ASIO_INCLUDE_DIR})
     if(WIN32)
         target_link_libraries(uorm_web INTERFACE ws2_32 mswsock)
     endif()
