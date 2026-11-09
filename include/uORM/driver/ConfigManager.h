@@ -5,7 +5,9 @@
 #include <uJSON/ujson.h>
 #include "uORM/orm/Error.h"
 
-using json = uJSON::Value;
+// 刻意不使用全局别名 using json = uJSON::Value：
+// 全局作用域的类型别名会与宿主工程里的 nlohmann::json 等别名冲突（重定义），
+// 也会污染包含本头的每个翻译单元。本文件内部一律写全名 uJSON::Value。
 
 namespace uORM { 
 
@@ -86,7 +88,7 @@ public:
             throw ConfigurationError("Cannot open config file: " + path);
         }
         try { 
-            json j; 
+            uJSON::Value j;
             f >> j; 
             f.close(); 
             
@@ -97,7 +99,7 @@ public:
             if (!j.at("DataBaseConfig").is_object()) {
                 throw ConfigurationError("'DataBaseConfig' must be an object");
             }
-            const json db = j.at("DataBaseConfig");
+            const uJSON::Value db = j.at("DataBaseConfig");
 
             // 读取驱动类型，默认为 mysql
             std::string drv = "mysql";
@@ -150,7 +152,7 @@ public:
             throw ConfigurationError("Cannot open config file: " + path);
         }
         try { 
-            json j; 
+            uJSON::Value j;
             f >> j; 
             f.close(); 
             
@@ -161,7 +163,7 @@ public:
             if (!j.at("RedisConfig").is_object()) {
                 throw ConfigurationError("'RedisConfig' must be an object");
             }
-            const json r = j.at("RedisConfig"); 
+            const uJSON::Value r = j.at("RedisConfig");
             
             // 验证每个配置项的存在性和类型
             if (!r.contains("hostname") || !r.at("hostname").is_string()) throw ConfigurationError("Redis missing 'hostname'");
