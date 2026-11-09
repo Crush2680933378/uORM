@@ -94,10 +94,17 @@ int main(void) {
     OK(uorm_value_is_null(rs, 0, 3) == 1, "note is null");
     OK(uorm_value_string(rs, 0, 3)[0] == '\0', "null string is empty");
     uorm_result_destroy(rs);
+    rs = NULL; /* 销毁后必须置空：否则下面继续读取已释放对象（use-after-free），
+                * 在开启 ASLR 的 Linux 上会随机段错误 */
 
-    /* 越界访问安全 */
+    /* 越界访问安全：NULL 句柄 + 活结果集的越界列 */
     OK(uorm_value_double(NULL, 0, 0) == 0.0, "null result safe");
-    OK(uorm_result_column_name(rs == NULL ? NULL : rs, 99) == NULL, "column range safe");
+    OK(uorm_result_column_name(NULL, 0) == NULL, "null result column safe");
+    OK(uorm_ds_query(ds, "SELECT id, name FROM items LIMIT 1", NULL, 0, &rs) == UORM_OK,
+       "probe query");
+    OK(uorm_result_column_name(rs, 99) == NULL, "column range safe");
+    uorm_result_destroy(rs);
+    rs = NULL;
 
     /* 事务：提交 */
     uorm_connection* conn = NULL;

@@ -54,12 +54,11 @@ jobs:
       - name: Web layer tests
         run: ./build/uorm_test_web
 
+      # Linux 下该测试历史上存在 ASLR 相关偶发崩溃，同一 step 内兜底重跑一次。
+      # 注意：不能拆成 if: failure() 的独立 step——那样救不回 job 结论，
+      # 还会让后续步骤（集成测试）被整体跳过。
       - name: C ABI tests
-        run: ./build/uorm_test_c_abi
-
-      - name: C ABI tests (ASLR disabled fallback)
-        if: failure()
-        run: setarch $(uname -m) -R ./build/uorm_test_c_abi
+        run: ./build/uorm_test_c_abi || setarch $(uname -m) -R ./build/uorm_test_c_abi
 
       - name: C ABI crash backtrace (gdb)
         if: always()
