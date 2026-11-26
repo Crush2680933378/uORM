@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react'
 import { Button, Card, Form, Input, Layout, message, Space, Tabs, Tag, Tree, Typography } from 'antd'
 import {
   DatabaseOutlined, TableOutlined, ConsoleSqlOutlined,
-  SettingOutlined, LogoutOutlined, ReloadOutlined, PlusOutlined,
+  SettingOutlined, LogoutOutlined, ReloadOutlined, PlusOutlined, UserOutlined,
 } from '@ant-design/icons'
 import { api, getToken, clearToken } from './api.js'
 import Connections from './pages/Connections.jsx'
